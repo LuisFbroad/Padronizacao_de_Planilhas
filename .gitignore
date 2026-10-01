@@ -1,0 +1,10 @@
+.venv/
+venv/
+
+.env
+.env.local
+.env.*
+
+__Agosto_Padrão__/
+__Padrão/
+__Planilhas/

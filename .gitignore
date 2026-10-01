@@ -1,10 +1,79 @@
-.venv/
-venv/
-
-.env
-.env.local
-.env.*
+# ==============================
+# Pasta Planilhas
+# ==============================
 
 __Agosto_Padrão__/
 __Padrão/
 __Planilhas/
+
+# ==============================
+# Python
+# ==============================
+
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Ambiente virtual
+.venv/
+venv/
+env/
+
+# ==============================
+# Variáveis de ambiente / dados sensíveis
+# ==============================
+
+.env
+.env.*
+!.env.example
+
+# ==============================
+# IDEs / editores
+# ==============================
+
+.vscode/
+.idea/
+
+# ==============================
+# Logs
+# ==============================
+
+logs/
+*.log
+
+# ==============================
+# Arquivos temporários
+# ==============================
+
+*.tmp
+*.temp
+*.bak
+*.swp
+.DS_Store
+Thumbs.db
+
+# ==============================
+# Excel
+# ==============================
+
+~$*.xlsx
+~$*.xls
+~$*.xlsm
+
+# ==============================
+# Dados do sistema
+# ==============================
+
+data/entrada/*
+data/processados/*
+data/saida/*
+
+!data/entrada/.gitkeep
+!data/processados/.gitkeep
+!data/saida/.gitkeep
+
+# ==============================
+# Relatórios gerados
+# ==============================
+
+*.pdf

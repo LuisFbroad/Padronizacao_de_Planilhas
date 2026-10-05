@@ -1,472 +1,1019 @@
 import customtkinter as ctk
+import pandas as pd
+
 from tkinter import filedialog, messagebox
-from pathlib import Path
+
+from interface.tema import CORES
+from interface.componentes import CardIndicador, BotaoPrincipal, TituloSecao, Mensagem
 
 from src.excel.leitor import LeitorExcel
 from src.excel.padronizador import PadronizadorExcel
+from src.excel.validador import ValidadorExcel
 from src.services.indicadores import IndicadoresService
-from src.logger import configurar_logger
 
 
 class TelaPrincipal(ctk.CTkFrame):
 
-    def __init__(self, master):
+    TIPOS_INDICACAO = ["Primária", "Secundária", "Terciária", "Quaternária", "Final"]
 
-        super().__init__(master)
+    def __init__(self, master, **kwargs):
 
-        # ==========================================
-        # CONFIGURAÇÕES
-        # ==========================================
+        super().__init__(master, fg_color=CORES["fundo"], **kwargs)
 
-        self.master = master
+        # ==========================================================
+        # VARIÁVEIS
+        # ==========================================================
 
-        self.logger = configurar_logger()
+        self.dados = pd.DataFrame()
 
-        self.caminho_arquivo = None
         self.leitor = None
-        self.dados = None
-        self.abas = []
+        self.indicadores_service = None
 
-        self.indicadores = None
+        self.modo_todas_indicacoes = False
+
+        self.tela_atual = None
+
+        # ==========================================================
+        # CONSTRUÇÃO
+        # ==========================================================
 
         self.criar_interface()
 
-    # ==========================================
-    # CRIAR INTERFACE
-    # ==========================================
+        self.mostrar_dashboard()
+
+    # ==============================================================
+    # INTERFACE PRINCIPAL
+    # ==============================================================
 
     def criar_interface(self):
 
-        # ==========================================
-        # CABEÇALHO
-        # ==========================================
+        # ----------------------------------------------------------
+        # SIDEBAR
+        # ----------------------------------------------------------
 
-        self.titulo = ctk.CTkLabel(
-            self, text="Sistema GAGC", font=ctk.CTkFont(size=28, weight="bold")
+        self.sidebar = ctk.CTkFrame(
+            self, width=220, fg_color=CORES["sidebar"], corner_radius=0
         )
 
-        self.titulo.pack(pady=(25, 5))
+        self.sidebar.pack(side="left", fill="y")
 
-        self.subtitulo = ctk.CTkLabel(
-            self, text="Gestão e consulta de planilhas", font=ctk.CTkFont(size=14)
+        self.sidebar.pack_propagate(False)
+
+        # ----------------------------------------------------------
+        # LOGO / NOME
+        # ----------------------------------------------------------
+
+        self.logo = ctk.CTkLabel(
+            self.sidebar,
+            text="GAGC",
+            text_color=CORES["destaque"],
+            font=ctk.CTkFont(size=30, weight="bold"),
         )
 
-        self.subtitulo.pack(pady=(0, 20))
+        self.logo.pack(pady=(30, 5))
 
-        # ==========================================
-        # ÁREA PRINCIPAL
-        # ==========================================
-
-        self.conteudo = ctk.CTkFrame(self, corner_radius=15)
-
-        self.conteudo.pack(fill="both", expand=True, padx=30, pady=10)
-
-        # ==========================================
-        # ARQUIVO
-        # ==========================================
-
-        self.label_arquivo = ctk.CTkLabel(
-            self.conteudo,
-            text="Arquivo Excel",
-            font=ctk.CTkFont(size=18, weight="bold"),
+        self.subtitulo_logo = ctk.CTkLabel(
+            self.sidebar,
+            text="SISTEMA",
+            text_color=CORES["texto_claro"],
+            font=ctk.CTkFont(size=11, weight="bold"),
         )
 
-        self.label_arquivo.pack(pady=(20, 5))
+        self.subtitulo_logo.pack(pady=(0, 30))
 
-        self.nome_arquivo = ctk.CTkLabel(
-            self.conteudo, text="Nenhum arquivo selecionado", font=ctk.CTkFont(size=14)
-        )
+        # ----------------------------------------------------------
+        # MENU
+        # ----------------------------------------------------------
 
-        self.nome_arquivo.pack(pady=(0, 10))
+        self.criar_botao_menu("Dashboard", self.mostrar_dashboard)
+
+        self.criar_botao_menu("Planilha", self.mostrar_planilha)
+
+        self.criar_botao_menu("Indicadores", self.mostrar_indicadores)
+
+        self.criar_botao_menu("Relatórios", self.mostrar_relatorios)
+
+        # ----------------------------------------------------------
+        # ESPAÇO
+        # ----------------------------------------------------------
+
+        self.espaco_sidebar = ctk.CTkFrame(self.sidebar, fg_color="transparent")
+
+        self.espaco_sidebar.pack(fill="both", expand=True)
+
+        # ----------------------------------------------------------
+        # BOTÃO CARREGAR EXCEL
+        # ----------------------------------------------------------
 
         self.botao_carregar = ctk.CTkButton(
-            self.conteudo,
-            text="📂 Carregar Excel",
-            height=40,
-            width=220,
+            self.sidebar,
+            text="＋  Carregar Excel",
             command=self.carregar_excel,
+            height=42,
+            corner_radius=8,
+            fg_color=CORES["destaque"],
+            hover_color=CORES["destaque_hover"],
+            text_color="#FFFFFF",
+            font=ctk.CTkFont(size=13, weight="bold"),
         )
 
-        self.botao_carregar.pack(pady=(0, 20))
+        self.botao_carregar.pack(padx=18, pady=(10, 30), fill="x")
 
-        # ==========================================
-        # CARDS
-        # ==========================================
+        # ----------------------------------------------------------
+        # ÁREA PRINCIPAL
+        # ----------------------------------------------------------
 
-        self.cards = ctk.CTkFrame(self.conteudo, fg_color="transparent")
-
-        self.cards.pack(fill="x", padx=30)
-
-        self.card_abas = self.criar_card(self.cards, "Abas", "0", 0)
-
-        self.card_registros = self.criar_card(self.cards, "Registros", "0", 1)
-
-        self.card_colunas = self.criar_card(self.cards, "Colunas", "0", 2)
-
-        # ==========================================
-        # ÁREA DE INDICADORES
-        # ==========================================
-
-        self.criar_area_indicadores()
-
-    # ==========================================
-    # CRIAR CARD
-    # ==========================================
-
-    def criar_card(self, parent, titulo, valor, coluna):
-
-        card = ctk.CTkFrame(parent, corner_radius=12)
-
-        card.grid(row=0, column=coluna, padx=10, pady=10, sticky="nsew")
-
-        parent.grid_columnconfigure(coluna, weight=1)
-
-        label_titulo = ctk.CTkLabel(card, text=titulo, font=ctk.CTkFont(size=13))
-
-        label_titulo.pack(pady=(12, 3))
-
-        label_valor = ctk.CTkLabel(
-            card, text=valor, font=ctk.CTkFont(size=26, weight="bold")
+        self.area_principal = ctk.CTkFrame(
+            self, fg_color=CORES["fundo"], corner_radius=0
         )
 
-        label_valor.pack(pady=(0, 12))
+        self.area_principal.pack(side="left", fill="both", expand=True)
 
-        return label_valor
+    # ==============================================================
+    # BOTÕES DA SIDEBAR
+    # ==============================================================
 
-    # ==========================================
-    # ÁREA DE INDICADORES
-    # ==========================================
+    def criar_botao_menu(self, texto, comando):
 
-    def criar_area_indicadores(self):
-
-        self.frame_indicadores = ctk.CTkFrame(self.conteudo, corner_radius=12)
-
-        self.frame_indicadores.pack(fill="both", expand=True, padx=30, pady=(20, 20))
-
-        # ==========================================
-        # TÍTULO
-        # ==========================================
-
-        self.titulo_indicadores = ctk.CTkLabel(
-            self.frame_indicadores,
-            text="🔎 Indicadores",
-            font=ctk.CTkFont(size=20, weight="bold"),
-        )
-
-        self.titulo_indicadores.pack(pady=(20, 10))
-
-        # ==========================================
-        # SELETOR DO TIPO
-        # ==========================================
-
-        self.frame_filtro = ctk.CTkFrame(self.frame_indicadores, fg_color="transparent")
-
-        self.frame_filtro.pack(fill="x", padx=30, pady=(0, 10))
-
-        self.label_tipo = ctk.CTkLabel(self.frame_filtro, text="Tipo de indicação:")
-
-        self.label_tipo.pack(side="left", padx=(0, 10))
-
-        self.tipo_indicacao = ctk.CTkComboBox(
-            self.frame_filtro,
-            values=["Primária", "Secundária", "Terciária", "Quaternária", "Final"],
-            width=200,
-            command=self.atualizar_indicadores,
-        )
-
-        self.tipo_indicacao.set("Primária")
-
-        self.tipo_indicacao.pack(side="left")
-
-        # ==========================================
-        # CABEÇALHO DA LISTA
-        # ==========================================
-
-        self.frame_cabecalho = ctk.CTkFrame(
-            self.frame_indicadores, fg_color="transparent"
-        )
-
-        self.frame_cabecalho.pack(fill="x", padx=30, pady=(10, 0))
-
-        self.label_nome_coluna = ctk.CTkLabel(
-            self.frame_cabecalho,
-            text="Indicador",
-            font=ctk.CTkFont(size=14, weight="bold"),
+        botao = ctk.CTkButton(
+            self.sidebar,
+            text=texto,
+            command=comando,
+            height=42,
+            corner_radius=8,
+            fg_color="transparent",
+            hover_color=CORES["sidebar_hover"],
+            text_color=CORES["texto_claro"],
             anchor="w",
+            font=ctk.CTkFont(size=13),
         )
 
-        self.label_nome_coluna.pack(side="left", fill="x", expand=True)
+        botao.pack(padx=12, pady=3, fill="x")
 
-        self.label_quantidade_coluna = ctk.CTkLabel(
-            self.frame_cabecalho,
-            text="Indicações",
+        return botao
+
+    # ==============================================================
+    # LIMPAR ÁREA PRINCIPAL
+    # ==============================================================
+
+    def limpar_area(self):
+
+        for widget in self.area_principal.winfo_children():
+            widget.destroy()
+
+    # ==============================================================
+    # TÍTULO
+    # ==============================================================
+
+    def criar_cabecalho(self, titulo, subtitulo=""):
+
+        frame = ctk.CTkFrame(self.area_principal, fg_color="transparent")
+
+        frame.pack(fill="x", padx=30, pady=(25, 10))
+
+        label_titulo = ctk.CTkLabel(
+            frame,
+            text=titulo,
+            text_color=CORES["texto"],
+            font=ctk.CTkFont(size=27, weight="bold"),
+        )
+
+        label_titulo.pack(anchor="w")
+
+        if subtitulo:
+
+            label_subtitulo = ctk.CTkLabel(
+                frame,
+                text=subtitulo,
+                text_color=CORES["texto_secundario"],
+                font=ctk.CTkFont(size=13),
+            )
+
+            label_subtitulo.pack(anchor="w", pady=(3, 0))
+
+    # ==============================================================
+    # DASHBOARD
+    # ==============================================================
+
+    def mostrar_dashboard(self):
+
+        self.tela_atual = "dashboard"
+
+        self.limpar_area()
+
+        self.criar_cabecalho("Dashboard", "Visão geral das informações da planilha")
+
+        # ----------------------------------------------------------
+        # CARDS
+        # ----------------------------------------------------------
+
+        cards = ctk.CTkFrame(self.area_principal, fg_color="transparent")
+
+        cards.pack(fill="x", padx=30, pady=(10, 20))
+
+        cards.grid_columnconfigure(0, weight=1)
+
+        cards.grid_columnconfigure(1, weight=1)
+
+        self.card_processos = CardIndicador(
+            cards, titulo="Processos", valor=self.quantidade_processos(), icone="▣"
+        )
+
+        self.card_processos.grid(row=0, column=0, padx=(0, 10), sticky="ew")
+
+        self.card_indicadores = CardIndicador(
+            cards, titulo="Indicadores", valor="0", icone="◆"
+        )
+
+        self.card_indicadores.grid(row=0, column=1, padx=(10, 0), sticky="ew")
+
+        # ----------------------------------------------------------
+        # FILTRO
+        # ----------------------------------------------------------
+
+        filtro_container = ctk.CTkFrame(
+            self.area_principal,
+            fg_color=CORES["card"],
+            corner_radius=12,
+            border_width=1,
+            border_color=CORES["borda"],
+        )
+
+        filtro_container.pack(fill="x", padx=30, pady=(0, 15))
+
+        titulo_filtro = ctk.CTkLabel(
+            filtro_container,
+            text="Filtro de indicações",
+            text_color=CORES["texto"],
+            font=ctk.CTkFont(size=15, weight="bold"),
+        )
+
+        titulo_filtro.pack(anchor="w", padx=20, pady=(15, 8))
+
+        filtro_frame = ctk.CTkFrame(filtro_container, fg_color="transparent")
+
+        filtro_frame.pack(fill="x", padx=20, pady=(0, 15))
+
+        # ----------------------------------------------------------
+        # COMBO
+        # ----------------------------------------------------------
+
+        self.combo_dashboard_tipo = ctk.CTkComboBox(
+            filtro_frame,
+            values=self.TIPOS_INDICACAO,
+            width=190,
+            height=36,
+            command=self.atualizar_ranking_dashboard,
+        )
+
+        self.combo_dashboard_tipo.set("Primária")
+
+        self.combo_dashboard_tipo.pack(side="left", padx=(0, 10))
+
+        # ----------------------------------------------------------
+        # BOTÃO TODAS
+        # ----------------------------------------------------------
+
+        self.botao_todas_indicacoes = ctk.CTkButton(
+            filtro_frame,
+            text="Todas as indicações",
+            command=self.mostrar_todas_indicacoes,
+            width=190,
+            height=36,
+            corner_radius=8,
+            fg_color=CORES["destaque"],
+            hover_color=CORES["destaque_hover"],
+            text_color="#FFFFFF",
+            font=ctk.CTkFont(size=12, weight="bold"),
+        )
+
+        self.botao_todas_indicacoes.pack(side="left", padx=(0, 10))
+
+        # ----------------------------------------------------------
+        # BOTÃO VOLTAR
+        # ----------------------------------------------------------
+
+        self.botao_voltar_tipos = ctk.CTkButton(
+            filtro_frame,
+            text="Voltar aos tipos",
+            command=self.voltar_tipos_indicacao,
+            width=160,
+            height=36,
+            corner_radius=8,
+            fg_color=CORES["sidebar"],
+            hover_color=CORES["sidebar_hover"],
+            text_color="#FFFFFF",
+            font=ctk.CTkFont(size=12, weight="bold"),
+        )
+
+        # IMPORTANTE:
+        # O botão começa escondido.
+        # Ele só aparece quando "Todas" estiver ativo.
+
+        # ----------------------------------------------------------
+        # RANKING
+        # ----------------------------------------------------------
+
+        ranking_container = ctk.CTkFrame(
+            self.area_principal,
+            fg_color=CORES["card"],
+            corner_radius=12,
+            border_width=1,
+            border_color=CORES["borda"],
+        )
+
+        ranking_container.pack(fill="both", expand=True, padx=30, pady=(0, 30))
+
+        titulo_ranking = ctk.CTkLabel(
+            ranking_container,
+            text="Ranking de indicações",
+            text_color=CORES["texto"],
+            font=ctk.CTkFont(size=17, weight="bold"),
+        )
+
+        titulo_ranking.pack(anchor="w", padx=20, pady=(15, 10))
+
+        # ----------------------------------------------------------
+        # ÁREA DE RANKING COM SCROLL
+        # ----------------------------------------------------------
+
+        self.ranking_scroll = ctk.CTkScrollableFrame(
+            ranking_container, fg_color="transparent"
+        )
+
+        self.ranking_scroll.pack(fill="both", expand=True, padx=15, pady=(0, 15))
+
+        self.atualizar_ranking_dashboard()
+
+    # ==============================================================
+    # MOSTRAR TODAS AS INDICAÇÕES
+    # ==============================================================
+
+    def mostrar_todas_indicacoes(self):
+
+        self.modo_todas_indicacoes = True
+
+        # ----------------------------------------------------------
+        # DESATIVA O COMBO
+        # ----------------------------------------------------------
+
+        self.combo_dashboard_tipo.configure(state="disabled")
+
+        # ----------------------------------------------------------
+        # DESATIVA O PRÓPRIO BOTÃO
+        # ----------------------------------------------------------
+
+        self.botao_todas_indicacoes.configure(
+            text="✓ Todas as indicações",
+            state="disabled",
+            fg_color="#555555",
+            hover_color="#555555",
+        )
+
+        # ----------------------------------------------------------
+        # MOSTRA BOTÃO VOLTAR
+        # ----------------------------------------------------------
+
+        self.botao_voltar_tipos.pack(side="left")
+
+        # ----------------------------------------------------------
+        # ATUALIZA RANKING
+        # ----------------------------------------------------------
+
+        self.atualizar_ranking_dashboard()
+
+    # ==============================================================
+    # VOLTAR PARA OS TIPOS
+    # ==============================================================
+
+    def voltar_tipos_indicacao(self):
+
+        self.modo_todas_indicacoes = False
+
+        # ----------------------------------------------------------
+        # ATIVA COMBO
+        # ----------------------------------------------------------
+
+        self.combo_dashboard_tipo.configure(state="normal")
+
+        self.combo_dashboard_tipo.set("Primária")
+
+        # ----------------------------------------------------------
+        # ATIVA BOTÃO TODAS
+        # ----------------------------------------------------------
+
+        self.botao_todas_indicacoes.configure(
+            text="Todas as indicações",
+            state="normal",
+            fg_color=CORES["destaque"],
+            hover_color=CORES["destaque_hover"],
+        )
+
+        # ----------------------------------------------------------
+        # ESCONDE BOTÃO VOLTAR
+        # ----------------------------------------------------------
+
+        self.botao_voltar_tipos.pack_forget()
+
+        # ----------------------------------------------------------
+        # ATUALIZA
+        # ----------------------------------------------------------
+
+        self.atualizar_ranking_dashboard()
+
+    # ==============================================================
+    # ATUALIZAR RANKING
+    # ==============================================================
+
+    def atualizar_ranking_dashboard(self, tipo=None):
+
+        if not hasattr(self, "ranking_scroll"):
+            return
+
+        # ----------------------------------------------------------
+        # LIMPA RANKING
+        # ----------------------------------------------------------
+
+        for widget in self.ranking_scroll.winfo_children():
+            widget.destroy()
+
+        # ----------------------------------------------------------
+        # VERIFICA SE EXISTE DADO
+        # ----------------------------------------------------------
+
+        if self.indicadores_service is None:
+
+            self.card_indicadores.atualizar(0)
+
+            mensagem = Mensagem(
+                self.ranking_scroll,
+                "Carregue uma planilha Excel para visualizar os indicadores.",
+                tipo="alerta",
+            )
+
+            mensagem.pack(pady=30)
+
+            return
+
+        # ----------------------------------------------------------
+        # MODO TODAS
+        # ----------------------------------------------------------
+
+        if self.modo_todas_indicacoes:
+
+            try:
+
+                ranking = self.indicadores_service.contar_todas_indicacoes()
+
+            except Exception as erro:
+
+                Mensagem(
+                    self.ranking_scroll,
+                    f"Erro ao calcular indicadores: {erro}",
+                    tipo="erro",
+                ).pack(pady=30)
+
+                return
+
+        # ----------------------------------------------------------
+        # MODO TIPO ESPECÍFICO
+        # ----------------------------------------------------------
+
+        else:
+
+            tipo_selecionado = tipo if tipo else self.combo_dashboard_tipo.get()
+
+            try:
+
+                ranking = self.indicadores_service.contar_indicacoes(tipo_selecionado)
+
+            except Exception as erro:
+
+                Mensagem(
+                    self.ranking_scroll,
+                    f"Erro ao calcular indicadores: {erro}",
+                    tipo="erro",
+                ).pack(pady=30)
+
+                return
+
+        # ----------------------------------------------------------
+        # ATUALIZA CARD
+        # ----------------------------------------------------------
+
+        quantidade_indicadores = len(ranking)
+
+        self.card_indicadores.atualizar(quantidade_indicadores)
+
+        # ----------------------------------------------------------
+        # SEM RESULTADOS
+        # ----------------------------------------------------------
+
+        if ranking.empty:
+
+            Mensagem(
+                self.ranking_scroll, "Nenhuma indicação encontrada.", tipo="alerta"
+            ).pack(pady=30)
+
+            return
+
+        # ----------------------------------------------------------
+        # MOSTRA RANKING
+        # ----------------------------------------------------------
+
+        self.mostrar_ranking(ranking)
+
+    # ==============================================================
+    # MOSTRAR RANKING
+    # ==============================================================
+
+    def mostrar_ranking(self, ranking):
+
+        for indice, linha in ranking.iterrows():
+
+            indicador = linha["indicador"]
+            quantidade = int(linha["quantidade"])
+
+            numero = indice + 1
+
+            # ------------------------------------------------------
+            # CARD DO RANKING
+            # ------------------------------------------------------
+
+            linha_frame = ctk.CTkFrame(
+                self.ranking_scroll,
+                fg_color=CORES["fundo_secundario"],
+                corner_radius=8,
+                border_width=1,
+                border_color=CORES["borda"],
+            )
+
+            linha_frame.pack(fill="x", pady=4, padx=3)
+
+            # ------------------------------------------------------
+            # POSIÇÃO
+            # ------------------------------------------------------
+
+            posicao = ctk.CTkLabel(
+                linha_frame,
+                text=f"{numero}º",
+                width=55,
+                text_color=CORES["destaque"],
+                font=ctk.CTkFont(size=14, weight="bold"),
+            )
+
+            posicao.pack(side="left", padx=(10, 5))
+
+            # ------------------------------------------------------
+            # NOME
+            # ------------------------------------------------------
+
+            nome = ctk.CTkLabel(
+                linha_frame,
+                text=str(indicador),
+                text_color=CORES["texto"],
+                font=ctk.CTkFont(size=14, weight="bold"),
+                anchor="w",
+            )
+
+            nome.pack(side="left", fill="x", expand=True, padx=10)
+
+            # ------------------------------------------------------
+            # QUANTIDADE
+            # ------------------------------------------------------
+
+            texto_quantidade = (
+                "pessoa indicada" if quantidade == 1 else "pessoas indicadas"
+            )
+
+            quantidade_label = ctk.CTkLabel(
+                linha_frame,
+                text=f"{quantidade} {texto_quantidade}",
+                text_color=CORES["texto_secundario"],
+                font=ctk.CTkFont(size=13),
+            )
+
+            quantidade_label.pack(side="right", padx=15)
+
+    # ==============================================================
+    # PLANILHA
+    # ==============================================================
+
+    def mostrar_planilha(self):
+
+        self.tela_atual = "planilha"
+
+        self.limpar_area()
+
+        self.criar_cabecalho("Planilha", "Visualização dos dados carregados")
+
+        # ----------------------------------------------------------
+        # SEM PLANILHA
+        # ----------------------------------------------------------
+
+        if self.dados.empty:
+
+            Mensagem(
+                self.area_principal, "Nenhuma planilha foi carregada.", tipo="alerta"
+            ).pack(pady=50)
+
+            return
+
+        # ----------------------------------------------------------
+        # CONTAINER
+        # ----------------------------------------------------------
+
+        container = ctk.CTkFrame(
+            self.area_principal,
+            fg_color=CORES["card"],
+            corner_radius=12,
+            border_width=1,
+            border_color=CORES["borda"],
+        )
+
+        container.pack(fill="both", expand=True, padx=30, pady=(0, 30))
+
+        # ----------------------------------------------------------
+        # INFORMAÇÕES
+        # ----------------------------------------------------------
+
+        info = ctk.CTkLabel(
+            container,
+            text=(
+                f"Registros: {len(self.dados)}    "
+                f"Colunas: {len(self.dados.columns)}"
+            ),
+            text_color=CORES["texto_secundario"],
+            font=ctk.CTkFont(size=13),
+        )
+
+        info.pack(anchor="w", padx=20, pady=15)
+
+        # ----------------------------------------------------------
+        # TABELA SIMPLES
+        # ----------------------------------------------------------
+
+        tabela = ctk.CTkScrollableFrame(container, fg_color="transparent")
+
+        tabela.pack(fill="both", expand=True, padx=15, pady=(0, 15))
+
+        # Cabeçalho
+        for coluna_numero, coluna in enumerate(self.dados.columns):
+
+            label = ctk.CTkLabel(
+                tabela,
+                text=str(coluna),
+                text_color=CORES["texto_claro"],
+                fg_color=CORES["sidebar"],
+                corner_radius=5,
+                width=150,
+                height=35,
+                font=ctk.CTkFont(size=12, weight="bold"),
+            )
+
+            label.grid(row=0, column=coluna_numero, padx=2, pady=2, sticky="nsew")
+
+        # Dados
+        limite = min(len(self.dados), 200)
+
+        for linha_numero in range(limite):
+
+            for coluna_numero, coluna in enumerate(self.dados.columns):
+
+                valor = self.dados.iloc[linha_numero, coluna_numero]
+
+                if pd.isna(valor):
+                    valor = ""
+
+                label = ctk.CTkLabel(
+                    tabela,
+                    text=str(valor),
+                    text_color=CORES["texto"],
+                    fg_color=CORES["fundo_secundario"],
+                    corner_radius=4,
+                    width=150,
+                    height=32,
+                    anchor="w",
+                )
+
+                label.grid(
+                    row=linha_numero + 1,
+                    column=coluna_numero,
+                    padx=2,
+                    pady=2,
+                    sticky="nsew",
+                )
+
+    # ==============================================================
+    # INDICADORES
+    # ==============================================================
+
+    def mostrar_indicadores(self):
+
+        self.tela_atual = "indicadores"
+
+        self.limpar_area()
+
+        self.criar_cabecalho("Indicadores", "Análise das indicações cadastradas")
+
+        # ----------------------------------------------------------
+        # SEM DADOS
+        # ----------------------------------------------------------
+
+        if self.indicadores_service is None:
+
+            Mensagem(
+                self.area_principal,
+                "Carregue uma planilha para visualizar os indicadores.",
+                tipo="alerta",
+            ).pack(pady=50)
+
+            return
+
+        # ----------------------------------------------------------
+        # FILTRO
+        # ----------------------------------------------------------
+
+        filtro = ctk.CTkFrame(
+            self.area_principal,
+            fg_color=CORES["card"],
+            corner_radius=12,
+            border_width=1,
+            border_color=CORES["borda"],
+        )
+
+        filtro.pack(fill="x", padx=30, pady=(0, 15))
+
+        titulo = ctk.CTkLabel(
+            filtro,
+            text="Tipo de indicação",
+            text_color=CORES["texto"],
             font=ctk.CTkFont(size=14, weight="bold"),
-            width=120,
         )
 
-        self.label_quantidade_coluna.pack(side="right")
+        titulo.pack(anchor="w", padx=20, pady=(15, 8))
 
-        # ==========================================
-        # LISTA DE RESULTADOS
-        # ==========================================
-
-        self.resultado = ctk.CTkScrollableFrame(self.frame_indicadores, corner_radius=8)
-
-        self.resultado.pack(fill="both", expand=True, padx=30, pady=(5, 20))
-
-        # ==========================================
-        # MENSAGEM INICIAL
-        # ==========================================
-
-        self.label_inicial = ctk.CTkLabel(
-            self.resultado,
-            text="Carregue um Excel para visualizar os indicadores.",
-            font=ctk.CTkFont(size=14),
+        combo = ctk.CTkComboBox(
+            filtro,
+            values=self.TIPOS_INDICACAO,
+            width=200,
+            command=self.atualizar_tela_indicadores,
         )
 
-        self.label_inicial.pack(pady=30)
+        combo.set("Primária")
 
-    # ==========================================
+        combo.pack(anchor="w", padx=20, pady=(0, 15))
+
+        self.combo_indicadores = combo
+
+        # ----------------------------------------------------------
+        # RANKING
+        # ----------------------------------------------------------
+
+        self.area_indicadores = ctk.CTkScrollableFrame(
+            self.area_principal, fg_color=CORES["card"], corner_radius=12
+        )
+
+        self.area_indicadores.pack(fill="both", expand=True, padx=30, pady=(0, 30))
+
+        self.atualizar_tela_indicadores("Primária")
+
+    # ==============================================================
+    # ATUALIZAR INDICADORES
+    # ==============================================================
+
+    def atualizar_tela_indicadores(self, tipo=None):
+
+        if not hasattr(self, "area_indicadores"):
+            return
+
+        for widget in self.area_indicadores.winfo_children():
+            widget.destroy()
+
+        tipo = tipo if tipo else self.combo_indicadores.get()
+
+        try:
+
+            ranking = self.indicadores_service.contar_indicacoes(tipo)
+
+        except Exception as erro:
+
+            Mensagem(self.area_indicadores, f"Erro: {erro}", tipo="erro").pack(pady=30)
+
+            return
+
+        if ranking.empty:
+
+            Mensagem(
+                self.area_indicadores, "Nenhuma indicação encontrada.", tipo="alerta"
+            ).pack(pady=30)
+
+            return
+
+        for indice, linha in ranking.iterrows():
+
+            indicador = linha["indicador"]
+
+            quantidade = int(linha["quantidade"])
+
+            frame = ctk.CTkFrame(
+                self.area_indicadores,
+                fg_color=CORES["fundo_secundario"],
+                corner_radius=8,
+                border_width=1,
+                border_color=CORES["borda"],
+            )
+
+            frame.pack(fill="x", padx=5, pady=4)
+
+            posicao = ctk.CTkLabel(
+                frame,
+                text=f"{indice + 1}º",
+                width=60,
+                text_color=CORES["destaque"],
+                font=ctk.CTkFont(size=14, weight="bold"),
+            )
+
+            posicao.pack(side="left", padx=10)
+
+            nome = ctk.CTkLabel(
+                frame,
+                text=str(indicador),
+                text_color=CORES["texto"],
+                font=ctk.CTkFont(size=14, weight="bold"),
+            )
+
+            nome.pack(side="left", fill="x", expand=True, anchor="w")
+
+            quantidade_label = ctk.CTkLabel(
+                frame,
+                text=str(quantidade),
+                text_color=CORES["texto_secundario"],
+                font=ctk.CTkFont(size=14, weight="bold"),
+            )
+
+            quantidade_label.pack(side="right", padx=20)
+
+    # ==============================================================
+    # RELATÓRIOS
+    # ==============================================================
+
+    def mostrar_relatorios(self):
+
+        self.tela_atual = "relatorios"
+
+        self.limpar_area()
+
+        self.criar_cabecalho("Relatórios", "Área destinada aos relatórios do sistema")
+
+        container = ctk.CTkFrame(
+            self.area_principal,
+            fg_color=CORES["card"],
+            corner_radius=12,
+            border_width=1,
+            border_color=CORES["borda"],
+        )
+
+        container.pack(fill="both", expand=True, padx=30, pady=(0, 30))
+
+        Mensagem(
+            container, "Módulo de relatórios em desenvolvimento.", tipo="normal"
+        ).pack(pady=50)
+
+    # ==============================================================
     # CARREGAR EXCEL
-    # ==========================================
+    # ==============================================================
 
     def carregar_excel(self):
-
-        self.logger.info("Usuário solicitou carregamento de Excel")
 
         caminho = filedialog.askopenfilename(
             title="Selecionar planilha Excel",
             filetypes=[
                 ("Arquivos Excel", "*.xlsx *.xlsm *.xls"),
-                ("Excel XLSX", "*.xlsx"),
-                ("Excel XLSM", "*.xlsm"),
-                ("Excel XLS", "*.xls"),
+                ("Todos os arquivos", "*.*"),
             ],
         )
 
-        # ==========================================
-        # CANCELAMENTO
-        # ==========================================
-
         if not caminho:
-
-            self.logger.info("Seleção de arquivo cancelada")
-
             return
 
         try:
 
-            # ======================================
+            # ------------------------------------------------------
             # LEITOR
-            # ======================================
+            # ------------------------------------------------------
 
             self.leitor = LeitorExcel(caminho)
 
-            self.caminho_arquivo = Path(caminho)
+            # ------------------------------------------------------
+            # ABA PRINCIPAL
+            # ------------------------------------------------------
 
-            # ======================================
-            # LISTAR ABAS
-            # ======================================
+            nome_aba = "RELATÓRIO MENSAL (NOVOS)"
 
-            self.abas = self.leitor.listar_abas()
+            abas = self.leitor.listar_abas()
 
-            if not self.abas:
+            if nome_aba not in abas:
 
-                raise ValueError("O arquivo não possui abas.")
+                raise ValueError(
+                    f"A aba '{nome_aba}' "
+                    "não foi encontrada.\n\n"
+                    f"Abas encontradas: {abas}"
+                )
 
-            # ======================================
-            # LER PRIMEIRA ABA
-            # ======================================
+            # ------------------------------------------------------
+            # LEITURA
+            # ------------------------------------------------------
 
-            primeira_aba = self.abas[0]
+            dados = self.leitor.ler_aba(nome_aba, linha_cabecalho=3)
 
-            self.logger.info(f"Lendo aba: {primeira_aba}")
-
-            dados = self.leitor.ler_aba(primeira_aba)
-
-            # ======================================
-            # PADRONIZAR
-            # ======================================
+            # ------------------------------------------------------
+            # PADRONIZAÇÃO
+            # ------------------------------------------------------
 
             padronizador = PadronizadorExcel()
 
-            self.dados = padronizador.padronizar(dados)
+            dados = padronizador.padronizar(dados)
 
-            # ======================================
-            # CRIAR SERVIÇO DE INDICADORES
-            # ======================================
+            # ------------------------------------------------------
+            # VALIDAÇÃO
+            # ------------------------------------------------------
 
-            self.indicadores = IndicadoresService(self.dados)
+            validador = ValidadorExcel()
 
-            # ======================================
-            # ATUALIZAR NOME DO ARQUIVO
-            # ======================================
+            erros = validador.validar_colunas(dados)
 
-            self.nome_arquivo.configure(text=self.caminho_arquivo.name)
+            if erros:
 
-            # ======================================
-            # ATUALIZAR CARDS
-            # ======================================
+                mensagem = "A planilha possui problemas:\n\n" + "\n".join(erros)
 
-            self.card_abas.configure(text=str(len(self.abas)))
+                messagebox.showwarning("Aviso", mensagem)
 
-            self.card_registros.configure(text=str(len(self.dados)))
+            # ------------------------------------------------------
+            # SALVA DADOS
+            # ------------------------------------------------------
 
-            self.card_colunas.configure(text=str(len(self.dados.columns)))
+            self.dados = dados
 
-            # ======================================
-            # ATUALIZAR INDICADORES
-            # ======================================
+            # ------------------------------------------------------
+            # SERVICE
+            # ------------------------------------------------------
 
-            self.atualizar_indicadores()
+            self.indicadores_service = IndicadoresService(self.dados)
 
-            # ======================================
-            # LOG
-            # ======================================
+            # ------------------------------------------------------
+            # ATUALIZA PROCESSOS
+            # ------------------------------------------------------
 
-            self.logger.info(
-                f"Excel carregado com sucesso: " f"{self.caminho_arquivo.name}"
-            )
+            if hasattr(self, "card_processos"):
 
-            self.logger.info(f"Registros encontrados: " f"{len(self.dados)}")
+                self.card_processos.atualizar(self.quantidade_processos())
 
-            self.logger.info(f"Colunas encontradas: " f"{len(self.dados.columns)}")
+            # ------------------------------------------------------
+            # RESET DO MODO TODAS
+            # ------------------------------------------------------
 
-            # ======================================
-            # MENSAGEM
-            # ======================================
+            self.modo_todas_indicacoes = False
 
-            messagebox.showinfo(
-                "Excel carregado",
-                (
-                    "Planilha carregada com sucesso!\n\n"
-                    f"Arquivo: {self.caminho_arquivo.name}\n"
-                    f"Abas: {len(self.abas)}\n"
-                    f"Registros: {len(self.dados)}"
-                ),
-            )
+            # ------------------------------------------------------
+            # DASHBOARD
+            # ------------------------------------------------------
+
+            self.mostrar_dashboard()
+
+            messagebox.showinfo("Sucesso", "Planilha carregada com sucesso!")
 
         except Exception as erro:
 
-            self.logger.exception(f"Erro ao carregar Excel: {erro}")
+            messagebox.showerror("Erro ao carregar planilha", str(erro))
 
-            messagebox.showerror(
-                "Erro", ("Não foi possível carregar " "a planilha.\n\n" f"Erro: {erro}")
-            )
+    # ==============================================================
+    # QUANTIDADE DE PROCESSOS
+    # ==============================================================
 
-    # ==========================================
-    # ATUALIZAR INDICADORES
-    # ==========================================
+    def quantidade_processos(self):
 
-    def atualizar_indicadores(self, escolha=None):
+        if self.dados.empty:
+            return 0
 
-        # ==========================================
-        # VERIFICAR SE EXISTE DADO
-        # ==========================================
+        # ----------------------------------------------------------
+        # TENTA USAR NÚMERO DO PROCESSO
+        # ----------------------------------------------------------
 
-        if self.indicadores is None:
+        colunas_processo = ["numero_processo", "Nº do Processo", "NÚMERO DO PROCESSO"]
 
-            return
+        for coluna in colunas_processo:
 
-        try:
+            if coluna in self.dados.columns:
 
-            # ======================================
-            # TIPO SELECIONADO
-            # ======================================
+                valores = self.dados[coluna].dropna().astype(str).str.strip()
 
-            tipo = self.tipo_indicacao.get()
+                valores = valores[valores != ""]
 
-            self.logger.info(f"Atualizando indicadores: {tipo}")
+                return len(valores)
 
-            # ======================================
-            # CALCULAR INDICADORES
-            # ======================================
+        # ----------------------------------------------------------
+        # CASO NÃO EXISTA NÚMERO DO PROCESSO
+        # ----------------------------------------------------------
 
-            resultado = self.indicadores.contar_indicacoes(tipo)
-
-            # ======================================
-            # LIMPAR RESULTADOS
-            # ======================================
-
-            for widget in self.resultado.winfo_children():
-
-                widget.destroy()
-
-            # ======================================
-            # NENHUM RESULTADO
-            # ======================================
-
-            if resultado.empty:
-
-                mensagem = ctk.CTkLabel(
-                    self.resultado,
-                    text=("Nenhuma indicação encontrada " f"em '{tipo}'."),
-                    font=ctk.CTkFont(size=14),
-                )
-
-                mensagem.pack(pady=30)
-
-                return
-
-            # ======================================
-            # CRIAR LINHAS
-            # ======================================
-
-            for _, linha in resultado.iterrows():
-
-                indicador = linha["indicador"]
-
-                quantidade = int(linha["quantidade"])
-
-                self.criar_linha_indicador(indicador, quantidade)
-
-            # ======================================
-            # LOG
-            # ======================================
-
-            self.logger.info(
-                f"{len(resultado)} indicadores " f"encontrados para {tipo}"
-            )
-
-        except Exception as erro:
-
-            self.logger.exception(f"Erro ao atualizar indicadores: {erro}")
-
-            messagebox.showerror(
-                "Erro", ("Não foi possível carregar " "os indicadores.\n\n" f"{erro}")
-            )
-
-    # ==========================================
-    # CRIAR LINHA DO INDICADOR
-    # ==========================================
-
-    def criar_linha_indicador(self, indicador, quantidade):
-
-        linha = ctk.CTkFrame(self.resultado, corner_radius=8)
-
-        linha.pack(fill="x", pady=4, padx=5)
-
-        # ==========================================
-        # NOME
-        # ==========================================
-
-        label_nome = ctk.CTkLabel(
-            linha, text=str(indicador), font=ctk.CTkFont(size=14), anchor="w"
-        )
-
-        label_nome.pack(side="left", fill="x", expand=True, padx=15, pady=10)
-
-        # ==========================================
-        # QUANTIDADE
-        # ==========================================
-
-        texto_quantidade = "1 pessoa" if quantidade == 1 else f"{quantidade} pessoas"
-
-        label_quantidade = ctk.CTkLabel(
-            linha,
-            text=texto_quantidade,
-            font=ctk.CTkFont(size=14, weight="bold"),
-            width=120,
-        )
-
-        label_quantidade.pack(side="right", padx=15, pady=10)
+        return len(self.dados)

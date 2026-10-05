@@ -172,3 +172,73 @@ class IndicadoresService:
         resultado = self.contar_indicacoes(tipo)
 
         return len(resultado)
+
+    def contar_todas_indicacoes(self) -> pd.DataFrame:
+        """
+        Conta todas as indicações existentes,
+        independentemente do tipo.
+        """
+
+        colunas = [
+            "indicacao_primaria",
+            "indicacao_secundaria",
+            "indicacao_terciaria",
+            "indicacao_quaternaria",
+            "indicacao_final",
+        ]
+
+        series = []
+
+        for coluna in colunas:
+
+            if coluna not in self.dados.columns:
+                continue
+
+            indicacoes = self.dados[coluna]
+
+            indicacoes = indicacoes.dropna()
+
+            indicacoes = indicacoes[
+                indicacoes.astype(str).str.strip() != ""
+            ]
+
+            if not indicacoes.empty:
+                series.append(
+                    indicacoes.astype(str).str.strip()
+                )
+
+        if not series:
+
+            return pd.DataFrame(
+                columns=[
+                    "indicador",
+                    "quantidade"
+                ]
+            )
+
+        todas = pd.concat(
+            series,
+            ignore_index=True
+        )
+
+        resultado = (
+            todas
+            .value_counts()
+            .reset_index()
+        )
+
+        resultado.columns = [
+            "indicador",
+            "quantidade"
+        ]
+
+        resultado = resultado.sort_values(
+            by="quantidade",
+            ascending=False
+        )
+
+        resultado = resultado.reset_index(
+            drop=True
+        )
+
+        return resultado

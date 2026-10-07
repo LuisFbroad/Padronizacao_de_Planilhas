@@ -1,41 +1,22 @@
 import os
 
 from dotenv import load_dotenv
-from sqlalchemy import create_engine, text
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy import create_engine
+from sqlalchemy.orm import declarative_base, sessionmaker
 
 load_dotenv()
 
-DB_HOST = os.getenv("DB_HOST")
-DB_PORT = os.getenv("DB_PORT")
-DB_NAME = os.getenv("DB_NAME")
-DB_USER = os.getenv("DB_USER")
-DB_PASSWORD = os.getenv("DB_PASSWORD")
 
-DATABSE_URL = (
-    f"postgresql+psycopg2://" f"{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
-)
+DATABASE_URL = os.getenv("DATABASE_URL")
 
-engine = create_engine(
-    DATABSE_URL,
-    pool_pre_ping=True
-    
-)
+if not DATABASE_URL:
+    raise ValueError("DATABASE_URL não foi encontrada no arquivo .env")
 
-SessionLocal = sessionmaker(
-    bind=engine,
-    autocommit=False,
-    autoflush=False
-)
 
-def testar_conexao():
-    try:
-        with engine.connect() as connection:
-            connection.execute(text("SELECT 1"))
+engine = create_engine(DATABASE_URL, echo=False)
 
-        print("Conexão com o banco estabelecida com sucesso.")
-        return True
 
-    except Exception as e:
-        print(f"Erro ao tentar conectar com o banco. \n{e}")
-        return False
+SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+
+
+Base = declarative_base()

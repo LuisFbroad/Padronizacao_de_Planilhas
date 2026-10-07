@@ -1,244 +1,206 @@
+from pathlib import Path
+
 import pandas as pd
 
+from src.database.connection import SessionLocal
+from src.database.models import Pessoa, Area, Indicacao
 
-class IndicadoresService:
-    """
-    Responsável por calcular indicadores a partir
-    dos dados carregados da planilha.
-    """
+PASTA_DADOS = Path("__Agosto_Padrão__")
 
-    # ==========================================
-    # COLUNAS DE INDICAÇÃO DISPONÍVEIS
-    # ==========================================
+COLUNAS_INDICACAO = [
+    "INDICAÇÃO PRIMÁRIA",
+    "INDICAÇÃO SECUNDÁRIA",
+    "INDICAÇÃO TERCIÁRIA",
+    "INDICAÇÃO QUARTERNARIA",
+    "INDICAÇÃO FINAL",
+]
 
-    COLUNAS_INDICACAO = {
-        "Primária": "indicacao_primaria",
-        "Secundária": "indicacao_secundaria",
-        "Terciária": "indicacao_terciaria",
-        "Quaternária": "indicacao_quaternaria",
-        "Final": "indicacao_final",
-    }
 
-    def __init__(self, dados: pd.DataFrame):
-        """
-        Recebe o DataFrame já carregado e padronizado.
-        """
+AREAS = {
+    "CIV": "Cível",
+    "PREV": "Previdenciário",
+    "PROJ": "Projetos",
+    "REV": "Revisão",
+    "TRAB": "Trabalhista",
+}
 
-        self.dados = dados.copy()
 
-    # ==========================================
-    # VERIFICAR COLUNA
-    # ==========================================
+def identificar_area(nome_arquivo):
+    nome = nome_arquivo.upper()
 
-    def verificar_coluna(self, coluna: str) -> bool:
-        """
-        Verifica se determinada coluna existe na planilha.
-        """
+    for sigla, area in AREAS.items():
+        if f"_{sigla}_" in nome:
+            return area
 
-        return coluna in self.dados.columns
+    return None
 
-    # ==========================================
-    # CONTAR INDICAÇÕES
-    # ==========================================
 
-    def contar_indicacoes(self, tipo: str = "Primária") -> pd.DataFrame:
-        """
-        Conta quantas pessoas cada indicador indicou.
+def limpar_valor(valor):
+    if pd.isna(valor):
+        return None
 
-        Exemplo:
+    valor = str(valor).strip()
 
-        LUIS FELIPE -> 5
-        JOÃO        -> 3
-        MARIA       -> 2
-        """
+    if not valor:
+        return None
 
-        # --------------------------------------
-        # Verifica se o tipo existe
-        # --------------------------------------
+    return valor
 
-        if tipo not in self.COLUNAS_INDICACAO:
-            raise ValueError(f"Tipo de indicação inválido: {tipo}")
 
-        coluna = self.COLUNAS_INDICACAO[tipo]
+def buscar_ou_criar_pessoa(session, nome):
+    pessoa = session.query(Pessoa).filter(Pessoa.nome == nome).first()
 
-        # --------------------------------------
-        # Verifica se a coluna existe
-        # --------------------------------------
+    if pessoa:
+        return pessoa
 
-        if not self.verificar_coluna(coluna):
+    pessoa = Pessoa(nome=nome)
+    session.add(pessoa)
+    session.flush()
 
-            raise ValueError(f"A coluna '{coluna}' não existe " "na planilha.")
+    return pessoa
 
-        # --------------------------------------
-        # Seleciona a coluna
-        # --------------------------------------
 
-        indicacoes = self.dados[coluna]
+def buscar_area(session, nome_area):
+    area = session.query(Area).filter(Area.nome == nome_area).first()
 
-        # --------------------------------------
-        # Remove valores vazios
-        # --------------------------------------
+    if not area:
+        raise ValueError(f"Área '{nome_area}' não encontrada no banco de dados.")
 
-        indicacoes = indicacoes.dropna()
+    return area
 
-        # --------------------------------------
-        # Remove textos vazios
-        # --------------------------------------
 
-        indicacoes = indicacoes[indicacoes.astype(str).str.strip() != ""]
+def importar_planilha(caminho, session):
+    nome_arquivo = caminho.name
 
-        # --------------------------------------
-        # Conta as ocorrências
-        # --------------------------------------
+    area_nome = identificar_area(nome_arquivo)
 
-        resultado = indicacoes.astype(str).str.strip().value_counts().reset_index()
+    if not area_nome:
+        print(f"[AVISO] Área não identificada: {nome_arquivo}")
+        return 0
 
-        # --------------------------------------
-        # Renomeia as colunas
-        # --------------------------------------
+    print()
+    print("=" * 80)
+    print(f"IMPORTANDO: {nome_arquivo}")
+    print(f"Área: {area_nome}")
+    print("=" * 80)
 
-        resultado.columns = ["indicador", "quantidade"]
+    df = pd.read_excel(caminho, header=3)
 
-        # --------------------------------------
-        # Ordena do maior para o menor
-        # --------------------------------------
+    area = buscar_area(session, area_nome)
 
-        resultado = resultado.sort_values(by="quantidade", ascending=False)
+    total_processos = 0
+    total_indicacoes = 0
 
-        # --------------------------------------
-        # Reseta o índice
-        # --------------------------------------
+    for indice, linha in df.iterrows():
 
-        resultado = resultado.reset_index(drop=True)
+        processo = limpar_valor(linha.get("Nº do Processo"))
 
-        return resultado
+        data_indicacao = linha.get("Data")
 
-    # ==========================================
-    # PESQUISAR UM INDICADOR
-    # ==========================================
+        if pd.notna(data_indicacao):
+            try:
+                data_indicacao = pd.to_datetime(data_indicacao).date()
+            except Exception:
+                data_indicacao = None
+        else:
+            data_indicacao = None
 
-    def pesquisar_indicador(self, nome: str, tipo: str = "Primária") -> int:
-        """
-        Retorna quantas pessoas foram indicadas
-        por um determinado indicador.
+        indicadores_do_processo = set()
 
-        Exemplo:
+        for coluna in COLUNAS_INDICACAO:
 
-        pesquisar_indicador("LUIS FELIPE")
-
-        Retorno:
-
-        5
-        """
-
-        resultado = self.contar_indicacoes(tipo)
-
-        nome_pesquisa = str(nome).strip().upper()
-
-        resultado["indicador_normalizado"] = (
-            resultado["indicador"].astype(str).str.strip().str.upper()
-        )
-
-        encontrado = resultado[resultado["indicador_normalizado"] == nome_pesquisa]
-
-        if encontrado.empty:
-            return 0
-
-        return int(encontrado.iloc[0]["quantidade"])
-
-    # ==========================================
-    # TOTAL DE INDICAÇÕES
-    # ==========================================
-
-    def total_indicacoes(self, tipo: str = "Primária") -> int:
-        """
-        Retorna o número total de indicações.
-        """
-
-        resultado = self.contar_indicacoes(tipo)
-
-        return int(resultado["quantidade"].sum())
-
-    # ==========================================
-    # QUANTIDADE DE INDICADORES
-    # ==========================================
-
-    def quantidade_indicadores(self, tipo: str = "Primária") -> int:
-        """
-        Retorna quantos indicadores diferentes
-        existem na planilha.
-        """
-
-        resultado = self.contar_indicacoes(tipo)
-
-        return len(resultado)
-
-    def contar_todas_indicacoes(self) -> pd.DataFrame:
-        """
-        Conta todas as indicações existentes,
-        independentemente do tipo.
-        """
-
-        colunas = [
-            "indicacao_primaria",
-            "indicacao_secundaria",
-            "indicacao_terciaria",
-            "indicacao_quaternaria",
-            "indicacao_final",
-        ]
-
-        series = []
-
-        for coluna in colunas:
-
-            if coluna not in self.dados.columns:
+            if coluna not in df.columns:
                 continue
 
-            indicacoes = self.dados[coluna]
+            valor = limpar_valor(linha.get(coluna))
 
-            indicacoes = indicacoes.dropna()
+            if valor is None:
+                continue
 
-            indicacoes = indicacoes[
-                indicacoes.astype(str).str.strip() != ""
-            ]
+            indicadores_do_processo.add(valor)
 
-            if not indicacoes.empty:
-                series.append(
-                    indicacoes.astype(str).str.strip()
+        if not indicadores_do_processo:
+            continue
+
+        total_processos += 1
+
+        for nome_indicador in indicadores_do_processo:
+
+            pessoa = buscar_ou_criar_pessoa(session, nome_indicador)
+
+            existe = (
+                session.query(Indicacao)
+                .filter(
+                    Indicacao.pessoa_id == pessoa.id,
+                    Indicacao.area_id == area.id,
+                    Indicacao.processo == processo,
                 )
-
-        if not series:
-
-            return pd.DataFrame(
-                columns=[
-                    "indicador",
-                    "quantidade"
-                ]
+                .first()
             )
 
-        todas = pd.concat(
-            series,
-            ignore_index=True
-        )
+            if existe:
+                continue
 
-        resultado = (
-            todas
-            .value_counts()
-            .reset_index()
-        )
+            indicacao = Indicacao(
+                pessoa_id=pessoa.id,
+                area_id=area.id,
+                processo=processo,
+                arquivo_origem=nome_arquivo,
+                data_indicacao=data_indicacao,
+            )
 
-        resultado.columns = [
-            "indicador",
-            "quantidade"
-        ]
+            session.add(indicacao)
 
-        resultado = resultado.sort_values(
-            by="quantidade",
-            ascending=False
-        )
+            total_indicacoes += 1
 
-        resultado = resultado.reset_index(
-            drop=True
-        )
+    print(f"Processos encontrados: {total_processos}")
+    print(f"Indicações inseridas: {total_indicacoes}")
 
-        return resultado
+    return total_indicacoes
+
+
+def importar_todas():
+    arquivos = sorted(PASTA_DADOS.glob("*.xlsx"))
+
+    if not arquivos:
+        print("Nenhuma planilha encontrada.")
+        return
+
+    session = SessionLocal()
+
+    total_geral = 0
+
+    try:
+
+        for arquivo in arquivos:
+
+            total = importar_planilha(arquivo, session)
+
+            total_geral += total
+
+        session.commit()
+
+        print()
+        print("=" * 80)
+        print("IMPORTAÇÃO CONCLUÍDA")
+        print("=" * 80)
+        print(f"Total de indicações inseridas: {total_geral}")
+
+    except Exception as erro:
+
+        session.rollback()
+
+        print()
+        print("=" * 80)
+        print("ERRO DURANTE A IMPORTAÇÃO")
+        print("=" * 80)
+        print(erro)
+
+        raise
+
+    finally:
+        session.close()
+
+
+if __name__ == "__main__":
+    importar_todas()

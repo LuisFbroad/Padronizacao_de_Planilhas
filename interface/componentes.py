@@ -1,12 +1,6 @@
-# interface/componentes.py
-
 import customtkinter as ctk
 
 from interface.tema import CORES
-
-# ============================================================
-# CARD
-# ============================================================
 
 
 class CardIndicador(ctk.CTkFrame):
@@ -22,105 +16,92 @@ class CardIndicador(ctk.CTkFrame):
             **kwargs
         )
 
-        # ----------------------------------------------------
-        # ÍCONE
-        # ----------------------------------------------------
+        self.grid_columnconfigure(1, weight=1)
 
-        self.label_icone = ctk.CTkLabel(self, text=icone, font=ctk.CTkFont(size=22))
+        self.icone_label = ctk.CTkLabel(
+            self,
+            text=icone,
+            text_color=CORES["destaque"],
+            font=ctk.CTkFont(size=26, weight="bold"),
+        )
 
-        self.label_icone.pack(anchor="w", padx=18, pady=(15, 0))
+        self.icone_label.grid(row=0, column=0, rowspan=2, padx=(18, 12), pady=18)
 
-        # ----------------------------------------------------
-        # TÍTULO
-        # ----------------------------------------------------
-
-        self.label_titulo = ctk.CTkLabel(
+        self.titulo_label = ctk.CTkLabel(
             self,
             text=titulo,
             text_color=CORES["texto_secundario"],
-            font=ctk.CTkFont(size=13),
+            font=ctk.CTkFont(size=12),
+            anchor="w",
         )
 
-        self.label_titulo.pack(anchor="w", padx=18, pady=(8, 0))
+        self.titulo_label.grid(row=0, column=1, sticky="sw", padx=(0, 15), pady=(15, 0))
 
-        # ----------------------------------------------------
-        # VALOR
-        # ----------------------------------------------------
-
-        self.label_valor = ctk.CTkLabel(
+        self.valor_label = ctk.CTkLabel(
             self,
             text=str(valor),
             text_color=CORES["texto"],
-            font=ctk.CTkFont(size=25, weight="bold"),
+            font=ctk.CTkFont(size=24, weight="bold"),
+            anchor="w",
         )
 
-        self.label_valor.pack(anchor="w", padx=18, pady=(2, 15))
+        self.valor_label.grid(row=1, column=1, sticky="nw", padx=(0, 15), pady=(0, 15))
 
-    def atualizar(self, valor):
+    def atualizar_valor(self, valor):
 
-        self.label_valor.configure(text=str(valor))
-
-
-# ============================================================
-# BOTÃO PRINCIPAL
-# ============================================================
+        self.valor_label.configure(text=str(valor))
 
 
 class BotaoPrincipal(ctk.CTkButton):
 
-    def __init__(self, master, text, command=None, **kwargs):
+    def __init__(self, master, texto, comando=None, **kwargs):
 
         super().__init__(
             master,
-            text=text,
-            command=command,
+            text=texto,
+            command=comando,
+            height=40,
+            corner_radius=8,
             fg_color=CORES["destaque"],
             hover_color=CORES["destaque_hover"],
-            text_color="#FFFFFF",
-            corner_radius=8,
-            height=38,
+            text_color=CORES["texto_botao"],
+            font=ctk.CTkFont(size=13, weight="bold"),
             **kwargs
         )
-
-
-# ============================================================
-# TÍTULO DE SEÇÃO
-# ============================================================
 
 
 class TituloSecao(ctk.CTkLabel):
 
-    def __init__(self, master, text, **kwargs):
+    def __init__(self, master, texto, **kwargs):
 
         super().__init__(
             master,
-            text=text,
+            text=texto,
             text_color=CORES["texto"],
-            font=ctk.CTkFont(size=20, weight="bold"),
+            font=ctk.CTkFont(size=18, weight="bold"),
+            anchor="w",
             **kwargs
         )
 
 
-# ============================================================
-# MENSAGEM
-# ============================================================
-
-
 class Mensagem(ctk.CTkLabel):
 
-    def __init__(self, master, text, tipo="normal", **kwargs):
+    def __init__(self, master, texto, tipo="normal", **kwargs):
 
-        cores = {
-            "normal": CORES["texto_secundario"],
-            "sucesso": CORES["sucesso"],
-            "erro": CORES["erro"],
-            "alerta": CORES["alerta"],
-        }
+        if tipo == "erro":
+            cor = CORES["erro"]
+
+        elif tipo == "alerta":
+            cor = CORES["alerta"]
+
+        else:
+            cor = CORES["texto_secundario"]
 
         super().__init__(
             master,
-            text=text,
-            text_color=cores.get(tipo, CORES["texto_secundario"]),
+            text=texto,
+            text_color=cor,
             font=ctk.CTkFont(size=13),
+            justify="center",
             **kwargs
         )

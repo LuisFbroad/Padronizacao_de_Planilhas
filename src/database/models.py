@@ -27,6 +27,7 @@ class Area(Base):
 
 
 class Indicacao(Base):
+
     __tablename__ = "indicacoes"
 
     id = Column(Integer, primary_key=True)
@@ -36,6 +37,8 @@ class Indicacao(Base):
     area_id = Column(Integer, ForeignKey("areas.id"), nullable=False)
 
     processo = Column(String(255), nullable=True)
+
+    tipo_indicacao = Column(String(50), nullable=True)
 
     data_indicacao = Column(Date, nullable=True)
 

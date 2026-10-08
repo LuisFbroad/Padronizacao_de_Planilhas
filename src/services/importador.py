@@ -8,13 +8,13 @@ from src.database.models import Pessoa, Area, Indicacao
 PASTA_DADOS = Path("__Agosto_Padrão__")
 
 
-COLUNAS_INDICACAO = [
-    "INDICAÇÃO PRIMÁRIA",
-    "INDICAÇÃO SECUNDÁRIA",
-    "INDICAÇÃO TERCIÁRIA",
-    "INDICAÇÃO QUARTERNARIA",
-    "INDICAÇÃO FINAL",
-]
+COLUNAS_INDICACAO = {
+    "INDICAÇÃO PRIMÁRIA": "Primária",
+    "INDICAÇÃO SECUNDÁRIA": "Secundária",
+    "INDICAÇÃO TERCIÁRIA": "Terciária",
+    "INDICAÇÃO QUARTERNARIA": "Quaternária",
+    "INDICAÇÃO FINAL": "Final",
+}
 
 
 AREAS = {
@@ -86,9 +86,9 @@ def obter_processo(linha):
 
 
 def obter_indicacoes(linha):
-    indicacoes = set()
+    indicacoes = []
 
-    for coluna in COLUNAS_INDICACAO:
+    for coluna, tipo in COLUNAS_INDICACAO.items():
 
         if coluna not in linha.index:
             continue
@@ -105,18 +105,24 @@ def obter_indicacoes(linha):
             pessoa = parte.strip()
 
             if pessoa:
-                indicacoes.add(pessoa)
+                indicacoes.append(
+                    {
+                        "nome": pessoa,
+                        "tipo": tipo,
+                    }
+                )
 
     return indicacoes
 
 
 def importar_planilha(caminho, session):
+
     nome_arquivo = caminho.name
 
     area_nome = identificar_area(nome_arquivo)
 
     if not area_nome:
-        print(f"[AVISO] Área não identificada: " f"{nome_arquivo}")
+        print(f"[AVISO] Área não identificada: {nome_arquivo}")
         return 0
 
     print()
@@ -132,27 +138,54 @@ def importar_planilha(caminho, session):
     total_processos = 0
     total_indicacoes = 0
 
+    # Guarda as indicações que já foram processadas
+    # durante esta própria planilha.
+    indicacoes_processadas = set()
+
     for indice, linha in df.iterrows():
 
         processo = obter_processo(linha)
 
         indicacoes = obter_indicacoes(linha)
 
-        if not indicacoes:
+        # Não importa registros sem processo
+        # ou sem indicação.
+        if not processo or not indicacoes:
             continue
 
         total_processos += 1
 
-        for nome in indicacoes:
+        for indicacao_data in indicacoes:
+
+            nome = indicacao_data["nome"]
+            tipo = indicacao_data["tipo"]
 
             pessoa = buscar_ou_criar_pessoa(session, nome)
 
+            # Chave completa da indicação.
+            #
+            # Assim podemos identificar duplicações
+            # que aparecem duas vezes na própria planilha.
+            chave = (
+                pessoa.id,
+                area.id,
+                processo,
+                tipo,
+            )
+
+            # Se essa indicação já apareceu anteriormente
+            # nesta mesma planilha, ignora.
+            if chave in indicacoes_processadas:
+                continue
+
+            # Verifica se já existe no banco.
             consulta = (
                 session.query(Indicacao)
                 .filter(
                     Indicacao.pessoa_id == pessoa.id,
                     Indicacao.area_id == area.id,
                     Indicacao.processo == processo,
+                    Indicacao.tipo_indicacao == tipo,
                 )
                 .first()
             )
@@ -164,16 +197,20 @@ def importar_planilha(caminho, session):
                 pessoa_id=pessoa.id,
                 area_id=area.id,
                 processo=processo,
+                tipo_indicacao=tipo,
                 arquivo_origem=nome_arquivo,
             )
 
             session.add(indicacao)
 
+            # Marca como processada.
+            indicacoes_processadas.add(chave)
+
             total_indicacoes += 1
 
-    print(f"Processos com indicação: " f"{total_processos}")
+    print(f"Processos com indicação: {total_processos}")
 
-    print(f"Indicações inseridas: " f"{total_indicacoes}")
+    print(f"Indicações inseridas: {total_indicacoes}")
 
     return total_indicacoes
 
@@ -181,13 +218,17 @@ def importar_planilha(caminho, session):
 def importar_todas():
 
     if not PASTA_DADOS.exists():
-        print(f"Pasta não encontrada: " f"{PASTA_DADOS}")
+
+        print(f"Pasta não encontrada: {PASTA_DADOS}")
+
         return
 
     arquivos = sorted(PASTA_DADOS.glob("*.xlsx"))
 
     if not arquivos:
+
         print("Nenhuma planilha encontrada.")
+
         return
 
     session = SessionLocal()
@@ -200,7 +241,7 @@ def importar_todas():
         print("IMPORTAÇÃO DAS PLANILHAS")
         print("=" * 80)
 
-        print(f"Planilhas encontradas: " f"{len(arquivos)}")
+        print(f"Planilhas encontradas: {len(arquivos)}")
 
         for arquivo in arquivos:
 
@@ -215,7 +256,7 @@ def importar_todas():
         print("IMPORTAÇÃO CONCLUÍDA")
         print("=" * 80)
 
-        print(f"Total de indicações inseridas: " f"{total_geral}")
+        print(f"Total de indicações inseridas: {total_geral}")
 
     except Exception as erro:
 
@@ -231,4 +272,9 @@ def importar_todas():
         raise
 
     finally:
+
         session.close()
+
+
+if __name__ == "__main__":
+    importar_todas()

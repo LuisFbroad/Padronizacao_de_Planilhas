@@ -312,17 +312,38 @@ class TelaPrincipal(ctk.CTkFrame):
         self.card_pessoas.atualizar_valor(self.obter_total_pessoas())
 
     def obter_total_processos(self):
+        session = SessionLocal()
+
         try:
-            return str(
-                contar_total_processos(
-                    area_id=(
-                        self.area_selecionada.id if self.area_selecionada else None
-                    ),
-                    tipo_indicacao=self.tipo_indicacao_selecionado,
+            if self.area_selecionada is None:
+                return "0"
+
+            nome_area = (self.area_selecionada.nome or "").strip().casefold()
+
+            if "projet" in nome_area:
+                consulta = session.query(
+                    func.coalesce(func.max(Processo.quantidade), 0)
+                ).filter(Processo.area_id == self.area_selecionada.id)
+
+                return str(consulta.scalar() or 0)
+
+            consulta = session.query(
+                func.coalesce(func.max(Indicacao.quantidade), 0)
+            ).filter(Indicacao.area_id == self.area_selecionada.id)
+
+            if self.tipo_indicacao_selecionado != "Todas":
+                consulta = consulta.filter(
+                    Indicacao.tipo_indicacao == self.tipo_indicacao_selecionado
                 )
-            )
-        except Exception:
+
+            return str(consulta.scalar() or 0)
+
+        except Exception as erro:
+            print(f"Erro ao contar processos: {erro}")
             return "0"
+
+        finally:
+            session.close()
 
     def obter_total_pessoas(self):
         try:
@@ -401,7 +422,7 @@ class TelaPrincipal(ctk.CTkFrame):
 
             ctk.CTkLabel(
                 linha,
-                text=f"{quantidade} processos",
+                text=f"{quantidade} indicações",
                 text_color=CORES["texto_secundario"],
                 font=ctk.CTkFont(size=13),
             ).pack(side="right", padx=15)
@@ -442,7 +463,13 @@ class TelaPrincipal(ctk.CTkFrame):
                 filtros,
                 text=titulo,
                 text_color=CORES["texto"],
-            ).grid(row=0, column=coluna, padx=15, pady=(15, 5), sticky="w")
+            ).grid(
+                row=0,
+                column=coluna,
+                padx=15,
+                pady=(15, 5),
+                sticky="w",
+            )
 
         self.meses_indicadores = {
             "Todos": None,
@@ -555,6 +582,7 @@ class TelaPrincipal(ctk.CTkFrame):
             "3ª": 3,
             "4ª": 4,
         }
+
         semana = semanas.get(semana_texto)
 
         return ano, mes, semana
@@ -568,8 +596,9 @@ class TelaPrincipal(ctk.CTkFrame):
         ano=None,
         mes=None,
         semana=None,
+        campo_data=None,
     ):
-        data = Indicacao.data_indicacao
+        data = campo_data or Indicacao.data_indicacao
 
         if ano is not None:
             consulta = consulta.filter(extract("year", data) == ano)
@@ -578,8 +607,6 @@ class TelaPrincipal(ctk.CTkFrame):
             consulta = consulta.filter(extract("month", data) == mes)
 
         if semana is not None:
-            dia = extract("day", data)
-
             limites = {
                 1: (1, 7),
                 2: (8, 14),
@@ -587,8 +614,12 @@ class TelaPrincipal(ctk.CTkFrame):
                 4: (22, 31),
             }
             inicio, fim = limites[semana]
+            dia = extract("day", data)
 
-            consulta = consulta.filter(dia >= inicio, dia <= fim)
+            consulta = consulta.filter(
+                dia >= inicio,
+                dia <= fim,
+            )
 
         return consulta
 
@@ -607,14 +638,36 @@ class TelaPrincipal(ctk.CTkFrame):
         session = SessionLocal()
 
         try:
-            consulta = session.query(
-                func.count(func.distinct(Indicacao.processo))
-            ).filter(Indicacao.processo.isnot(None))
+            if self.area_selecionada is None:
+                return 0
+
+            nome_area = (self.area_selecionada.nome or "").strip().casefold()
+
+            if "projet" in nome_area:
+                consulta = session.query(
+                    func.coalesce(func.max(Processo.quantidade), 0)
+                ).filter(Processo.area_id == self.area_selecionada.id)
+
+                consulta = self.aplicar_filtros_periodo(
+                    consulta,
+                    ano,
+                    mes,
+                    semana,
+                    campo_data=Processo.data_processo,
+                )
+
+                if self.tipo_indicacao_selecionado != "Todas":
+                    return 0
+
+                return consulta.scalar() or 0
+
+            consulta = session.query(func.coalesce(func.max(Indicacao.quantidade), 0))
 
             consulta = self.aplicar_filtros_indicadores(consulta)
             consulta = self.aplicar_filtros_periodo(consulta, ano, mes, semana)
 
             return consulta.scalar() or 0
+
         finally:
             session.close()
 
@@ -622,14 +675,13 @@ class TelaPrincipal(ctk.CTkFrame):
         session = SessionLocal()
 
         try:
-            consulta = session.query(
-                func.count(func.distinct(Indicacao.pessoa_id))
-            ).filter(Indicacao.processo.isnot(None))
+            consulta = session.query(func.count(func.distinct(Indicacao.pessoa_id)))
 
             consulta = self.aplicar_filtros_indicadores(consulta)
             consulta = self.aplicar_filtros_periodo(consulta, ano, mes, semana)
 
             return consulta.scalar() or 0
+
         finally:
             session.close()
 
@@ -642,15 +694,12 @@ class TelaPrincipal(ctk.CTkFrame):
         session = SessionLocal()
 
         try:
-            consulta = (
-                session.query(
-                    Pessoa.nome,
-                    func.count(func.distinct(Indicacao.processo)).label(
-                        "total_processos"
-                    ),
-                )
-                .join(Indicacao, Indicacao.pessoa_id == Pessoa.id)
-                .filter(Indicacao.processo.isnot(None))
+            consulta = session.query(
+                Pessoa.nome,
+                func.count(Indicacao.id).label("total_indicacoes"),
+            ).join(
+                Indicacao,
+                Indicacao.pessoa_id == Pessoa.id,
             )
 
             consulta = self.aplicar_filtros_indicadores(consulta)
@@ -659,11 +708,12 @@ class TelaPrincipal(ctk.CTkFrame):
             return (
                 consulta.group_by(Pessoa.id, Pessoa.nome)
                 .order_by(
-                    func.count(func.distinct(Indicacao.processo)).desc(),
+                    func.count(Indicacao.id).desc(),
                     Pessoa.nome,
                 )
                 .all()
             )
+
         finally:
             session.close()
 
@@ -671,21 +721,32 @@ class TelaPrincipal(ctk.CTkFrame):
         if not hasattr(self, "ranking_indicadores"):
             return
 
-        ano, mes, semana = self.obter_periodo_indicadores()
-
         for widget in self.ranking_indicadores.winfo_children():
             widget.destroy()
 
+        ano, mes, semana = self.obter_periodo_indicadores()
+
         try:
             total_processos = self.contar_processos_periodo(
-                ano=ano, mes=mes, semana=semana
+                ano=ano,
+                mes=mes,
+                semana=semana,
             )
-            total_pessoas = self.contar_pessoas_periodo(ano=ano, mes=mes, semana=semana)
+
+            total_pessoas = self.contar_pessoas_periodo(
+                ano=ano,
+                mes=mes,
+                semana=semana,
+            )
 
             self.card_indicadores_processos.atualizar_valor(total_processos)
             self.card_indicadores_pessoas.atualizar_valor(total_pessoas)
 
-            ranking = self.obter_ranking_indicadores(ano=ano, mes=mes, semana=semana)
+            ranking = self.obter_ranking_indicadores(
+                ano=ano,
+                mes=mes,
+                semana=semana,
+            )
 
             if not ranking:
                 Mensagem(
@@ -721,7 +782,7 @@ class TelaPrincipal(ctk.CTkFrame):
 
                 ctk.CTkLabel(
                     linha,
-                    text=f"{quantidade} processos",
+                    text=f"{quantidade} indicações",
                     text_color=CORES["texto_secundario"],
                 ).pack(side="right", padx=15)
 
@@ -763,7 +824,12 @@ class TelaPrincipal(ctk.CTkFrame):
         for coluna in range(4):
             filtros.grid_columnconfigure(coluna, weight=1)
 
-        titulos = ["Ano", "Mês", "Semana", "Tipo de indicação"]
+        titulos = [
+            "Ano",
+            "Mês",
+            "Semana",
+            "Tipo de indicação",
+        ]
 
         for coluna, titulo in enumerate(titulos):
             ctk.CTkLabel(
@@ -921,7 +987,8 @@ class TelaPrincipal(ctk.CTkFrame):
 
         for coluna, titulo in enumerate(["Área", "Processos", "Indicações"]):
             cabecalho_tabela.grid_columnconfigure(
-                coluna, weight=3 if coluna == 0 else 1
+                coluna,
+                weight=3 if coluna == 0 else 1,
             )
 
             ctk.CTkLabel(
@@ -961,6 +1028,7 @@ class TelaPrincipal(ctk.CTkFrame):
             "3ª": 3,
             "4ª": 4,
         }
+
         semana = semanas.get(semana_texto)
 
         return ano, mes, semana, tipo
@@ -991,9 +1059,14 @@ class TelaPrincipal(ctk.CTkFrame):
                 3: (15, 21),
                 4: (22, 31),
             }
+
             inicio, fim = limites[semana]
             dia = extract("day", data)
-            consulta = consulta.filter(dia >= inicio, dia <= fim)
+
+            consulta = consulta.filter(
+                dia >= inicio,
+                dia <= fim,
+            )
 
         if tipo != "Todas":
             consulta = consulta.filter(Indicacao.tipo_indicacao == tipo)
@@ -1008,49 +1081,41 @@ class TelaPrincipal(ctk.CTkFrame):
             areas = session.query(Area).order_by(Area.nome).all()
             resultados = []
 
+            limites = {
+                1: (1, 7),
+                2: (8, 14),
+                3: (15, 21),
+                4: (22, 31),
+            }
+
             for area in areas:
                 nome_area = (area.nome or "").strip().casefold()
 
-                if nome_area in {"projeto", "projetos"}:
-                    consulta_processos = session.query(
-                        func.count(func.distinct(Processo.numero))
-                    ).filter(
-                        Processo.area_id == area.id,
-                        Processo.numero.isnot(None),
-                        func.trim(Processo.numero) != "",
-                    )
+                if "projet" in nome_area:
+                    consulta = session.query(
+                        func.coalesce(func.max(Processo.quantidade), 0)
+                    ).filter(Processo.area_id == area.id)
 
                     if ano is not None:
-                        consulta_processos = consulta_processos.filter(
+                        consulta = consulta.filter(
                             extract("year", Processo.data_processo) == ano
                         )
 
                     if mes is not None:
-                        consulta_processos = consulta_processos.filter(
+                        consulta = consulta.filter(
                             extract("month", Processo.data_processo) == mes
                         )
 
                     if semana is not None:
-                        limites = {
-                            1: (1, 7),
-                            2: (8, 14),
-                            3: (15, 21),
-                            4: (22, 31),
-                        }
-
                         inicio, fim = limites[semana]
                         dia = extract("day", Processo.data_processo)
 
-                        consulta_processos = consulta_processos.filter(
+                        consulta = consulta.filter(
                             dia >= inicio,
                             dia <= fim,
                         )
 
-                    total_processos = (
-                        consulta_processos.scalar() or 0
-                        if tipo == "Todas"
-                        else 0
-                    )
+                    total_processos = (consulta.scalar() or 0) if tipo == "Todas" else 0
 
                     total_indicacoes = 0
 
@@ -1069,16 +1134,9 @@ class TelaPrincipal(ctk.CTkFrame):
 
                     total_indicacoes = consulta.count()
 
-                    consulta_processos = consulta.filter(
-                        Indicacao.processo.isnot(None),
-                        func.trim(Indicacao.processo) != "",
-                    )
-
                     total_processos = (
-                        consulta_processos.with_entities(
-                            func.count(
-                                func.distinct(Indicacao.processo)
-                            )
+                        consulta.with_entities(
+                            func.coalesce(func.max(Indicacao.quantidade), 0)
                         ).scalar()
                         or 0
                     )
@@ -1086,14 +1144,12 @@ class TelaPrincipal(ctk.CTkFrame):
                 resultados.append(
                     (
                         area.nome,
-                        total_processos,
+                        int(total_processos),
                         total_indicacoes,
                     )
                 )
 
-            total_geral_processos = sum(
-                processos for _, processos, _ in resultados
-            )
+            total_geral_processos = sum(processos for _, processos, _ in resultados)
 
             return resultados, total_geral_processos
 
@@ -1111,15 +1167,14 @@ class TelaPrincipal(ctk.CTkFrame):
             resultados, total_processos = self.consultar_relatorio_area()
 
             self.card_relatorio_processos.atualizar_valor(total_processos)
+
             total_areas_com_resultados = sum(
                 1
                 for _, processos, indicacoes in resultados
                 if processos > 0 or indicacoes > 0
             )
 
-            self.card_relatorio_areas.atualizar_valor(
-                total_areas_com_resultados
-            )
+            self.card_relatorio_areas.atualizar_valor(total_areas_com_resultados)
 
             if not resultados:
                 Mensagem(
@@ -1140,9 +1195,16 @@ class TelaPrincipal(ctk.CTkFrame):
                 linha.pack(fill="x", pady=3)
 
                 for coluna in range(3):
-                    linha.grid_columnconfigure(coluna, weight=3 if coluna == 0 else 1)
+                    linha.grid_columnconfigure(
+                        coluna,
+                        weight=3 if coluna == 0 else 1,
+                    )
 
-                valores = [area, str(processos), str(indicacoes)]
+                valores = [
+                    area,
+                    str(processos),
+                    str(indicacoes),
+                ]
 
                 for coluna, valor in enumerate(valores):
                     ctk.CTkLabel(
@@ -1151,7 +1213,7 @@ class TelaPrincipal(ctk.CTkFrame):
                         text_color=CORES["texto"],
                         font=ctk.CTkFont(
                             size=13,
-                            weight="bold" if coluna == 0 else "normal",
+                            weight=("bold" if coluna == 0 else "normal"),
                         ),
                         anchor="w" if coluna == 0 else "center",
                     ).grid(
@@ -1180,6 +1242,8 @@ class TelaPrincipal(ctk.CTkFrame):
                 )
                 return
 
+            ano, mes, semana, tipo = self.obter_filtros_relatorio()
+
             caminho = filedialog.asksaveasfilename(
                 title="Salvar relatório por área",
                 defaultextension=".xlsx",
@@ -1189,8 +1253,6 @@ class TelaPrincipal(ctk.CTkFrame):
 
             if not caminho:
                 return
-
-            ano, mes, semana, tipo = self.obter_filtros_relatorio()
 
             workbook = Workbook()
             planilha = workbook.active
@@ -1205,10 +1267,19 @@ class TelaPrincipal(ctk.CTkFrame):
             )
 
             for area, processos, indicacoes in resultados:
-                planilha.append([area, processos, indicacoes])
+                planilha.append(
+                    [
+                        area,
+                        processos,
+                        indicacoes,
+                    ]
+                )
 
             for celula in planilha[1]:
-                celula.font = Font(bold=True, color="FFFFFF")
+                celula.font = Font(
+                    bold=True,
+                    color="FFFFFF",
+                )
                 celula.fill = PatternFill(
                     fill_type="solid",
                     fgColor="244062",
@@ -1239,7 +1310,12 @@ class TelaPrincipal(ctk.CTkFrame):
                     self.combo_semana_relatorios.get(),
                 ]
             )
-            planilha.append(["Tipo de indicação", tipo])
+            planilha.append(
+                [
+                    "Tipo de indicação",
+                    tipo,
+                ]
+            )
             planilha.append(
                 [
                     "Total geral de processos",

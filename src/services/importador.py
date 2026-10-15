@@ -1,5 +1,4 @@
 from pathlib import Path
-from datetime import date, datetime
 import re
 import unicodedata
 
@@ -43,7 +42,12 @@ AREAS_ARQUIVOS = {
     },
     "REV": {
         "nome": "Restituição",
-        "alternativas": ["Restituição", "Restituicao", "Revisão", "Revisao"],
+        "alternativas": [
+            "Restituição",
+            "Restituicao",
+            "Revisão",
+            "Revisao",
+        ],
     },
     "TRAB": {
         "nome": "Trabalhista",
@@ -57,7 +61,6 @@ def normalizar_texto(valor):
         return ""
 
     texto = str(valor).strip()
-
     texto = unicodedata.normalize("NFKD", texto)
     texto = "".join(
         caractere for caractere in texto if not unicodedata.combining(caractere)
@@ -126,6 +129,27 @@ def obter_campo(dados, alternativas):
     return None
 
 
+def obter_quantidade(dados):
+    valor = obter_campo(
+        dados,
+        ["Qnt.", "Quantidade", "Qnt"],
+    )
+
+    if valor is None:
+        return 0
+
+    try:
+        quantidade = float(str(valor).strip().replace(",", "."))
+
+        if quantidade < 0 or not quantidade.is_integer():
+            return 0
+
+        return int(quantidade)
+
+    except (TypeError, ValueError, OverflowError):
+        return 0
+
+
 def identificar_area(nome_arquivo):
     nome = nome_arquivo.upper()
 
@@ -165,14 +189,11 @@ def buscar_ou_criar_pessoa(session, nome):
     if not nome_normalizado:
         return None
 
-    # Primeiro verifica pessoas que já estão pendentes
-    # de gravação nesta sessão.
     for objeto in session.new:
         if isinstance(objeto, Pessoa):
             if normalizar_texto(objeto.nome) == nome_normalizado:
                 return objeto
 
-    # Pesquisa sem provocar flush automático de outros objetos.
     with session.no_autoflush:
         pessoa = (
             session.query(Pessoa)
@@ -183,8 +204,6 @@ def buscar_ou_criar_pessoa(session, nome):
     if pessoa:
         return pessoa
 
-    # O PostgreSQL ignora o INSERT se o nome exato já existir.
-    # Isso evita a violação da restrição pessoas_nome_key.
     comando = (
         pg_insert(Pessoa)
         .values(nome=nome)
@@ -193,7 +212,6 @@ def buscar_ou_criar_pessoa(session, nome):
 
     session.execute(comando)
 
-    # Busca novamente o registro, inclusive se ele já existia.
     with session.no_autoflush:
         pessoa = (
             session.query(Pessoa)
@@ -204,9 +222,6 @@ def buscar_ou_criar_pessoa(session, nome):
     if pessoa:
         return pessoa
 
-    # Caso tenha ocorrido uma concorrência ou uma variação
-    # inesperada no registro, informa o problema sem esconder
-    # o erro original do banco.
     raise RuntimeError(f"Não foi possível localizar ou cadastrar a pessoa: {nome}")
 
 
@@ -278,7 +293,6 @@ def obter_indicacoes(dados):
         if not valor:
             continue
 
-        # As planilhas podem separar várias pessoas por "/".
         partes = str(valor).split("/")
 
         for parte in partes:
@@ -311,6 +325,7 @@ def buscar_ou_criar_processo(
     numero,
     data_processo,
     nome_arquivo,
+    quantidade,
     chaves_processos_pendentes,
 ):
     numero = limpar_valor(numero)
@@ -323,9 +338,6 @@ def buscar_ou_criar_processo(
         normalizar_texto(numero),
     )
 
-    if chave in chaves_processos_pendentes:
-        return False
-
     processo_existente = (
         session.query(Processo)
         .filter(
@@ -336,7 +348,13 @@ def buscar_ou_criar_processo(
     )
 
     if processo_existente:
+        processo_existente.quantidade = quantidade
+        processo_existente.data_processo = data_processo
+        processo_existente.arquivo_origem = nome_arquivo
         chaves_processos_pendentes.add(chave)
+        return False
+
+    if chave in chaves_processos_pendentes:
         return False
 
     processo = Processo(
@@ -344,6 +362,7 @@ def buscar_ou_criar_processo(
         numero=numero,
         data_processo=data_processo,
         arquivo_origem=nome_arquivo,
+        quantidade=quantidade,
     )
 
     session.add(processo)
@@ -354,7 +373,7 @@ def buscar_ou_criar_processo(
     return True
 
 
-def indicacao_existe(
+def buscar_indicacao_existente(
     session,
     pessoa_id,
     area_id,
@@ -382,7 +401,7 @@ def indicacao_existe(
         else:
             consulta = consulta.filter(Indicacao.data_indicacao.is_(None))
 
-    return consulta.first() is not None
+    return consulta.first()
 
 
 def importar_planilha(
@@ -411,6 +430,7 @@ def importar_planilha(
     total_indicacoes = 0
     total_processos = 0
     total_linhas_com_indicacao = 0
+    maior_quantidade = 0
 
     eh_projeto = "PROJ" in nome_arquivo.upper()
     eh_trabalhista = "TRAB" in nome_arquivo.upper()
@@ -418,13 +438,17 @@ def importar_planilha(
     for _, linha in df.iterrows():
         dados = preparar_linha(linha)
 
+        quantidade = obter_quantidade(dados)
+        maior_quantidade = max(
+            maior_quantidade,
+            quantidade,
+        )
+
         numero_processo = obter_processo(dados)
         numero_rpv = obter_numero_rpv(dados)
         data_processo = obter_data(dados)
         indicacoes = obter_indicacoes(dados)
 
-        # PROJETO:
-        # importa os processos/RPVs mesmo sem indicadores.
         if eh_projeto and numero_rpv:
             inserido = buscar_ou_criar_processo(
                 session=session,
@@ -432,40 +456,36 @@ def importar_planilha(
                 numero=numero_rpv,
                 data_processo=data_processo,
                 nome_arquivo=nome_arquivo,
+                quantidade=quantidade,
                 chaves_processos_pendentes=chaves_processos_pendentes,
             )
 
             if inserido:
                 total_processos += 1
 
-        # Se não há nomes de indicadores, não cria pessoas
-        # nem indicações fictícias.
         if not indicacoes:
             continue
 
         total_linhas_com_indicacao += 1
 
-        # TRABALHISTA:
-        # importa as indicações das pessoas mesmo quando
-        # a planilha não possui número de processo.
         if eh_trabalhista:
             processo_indicacao = numero_processo
         else:
             processo_indicacao = numero_processo
 
-            # As demais áreas só geram indicações quando
-            # há um processo associado.
             if not processo_indicacao:
                 continue
 
         for item in indicacoes:
-            nome = item["nome"]
-            tipo = item["tipo"]
-
-            pessoa = buscar_ou_criar_pessoa(session, nome)
+            pessoa = buscar_ou_criar_pessoa(
+                session,
+                item["nome"],
+            )
 
             if pessoa is None:
                 continue
+
+            tipo = item["tipo"]
 
             chave = (
                 pessoa.id,
@@ -476,12 +496,10 @@ def importar_planilha(
                 nome_arquivo if not processo_indicacao else None,
             )
 
-            # Impede duplicidade na própria execução,
-            # inclusive para indicações sem processo.
             if chave in chaves_indicacoes_pendentes:
                 continue
 
-            if indicacao_existe(
+            indicacao_existente = buscar_indicacao_existente(
                 session=session,
                 pessoa_id=pessoa.id,
                 area_id=area.id,
@@ -489,7 +507,10 @@ def importar_planilha(
                 tipo=tipo,
                 data_indicacao=data_processo,
                 nome_arquivo=nome_arquivo,
-            ):
+            )
+
+            if indicacao_existente:
+                indicacao_existente.quantidade = quantidade
                 chaves_indicacoes_pendentes.add(chave)
                 continue
 
@@ -500,6 +521,7 @@ def importar_planilha(
                 tipo_indicacao=tipo,
                 data_indicacao=data_processo,
                 arquivo_origem=nome_arquivo,
+                quantidade=quantidade,
             )
 
             session.add(indicacao)
@@ -507,6 +529,7 @@ def importar_planilha(
             total_indicacoes += 1
 
     print(f"Linhas com indicação: {total_linhas_com_indicacao}")
+    print(f"Maior quantidade Qnt.: {maior_quantidade}")
     print(f"Processos/RPVs novos: {total_processos}")
     print(f"Indicações novas: {total_indicacoes}")
 
@@ -559,8 +582,8 @@ def importar_todas():
         print("=" * 80)
         print("IMPORTAÇÃO CONCLUÍDA")
         print("=" * 80)
-        print(f"Total de indicações inseridas: {total_geral_indicacoes}")
-        print(f"Total de processos/RPVs inseridos: {total_geral_processos}")
+        print(f"Total de indicações inseridas: " f"{total_geral_indicacoes}")
+        print(f"Total de processos/RPVs inseridos: " f"{total_geral_processos}")
 
     except Exception as erro:
         session.rollback()

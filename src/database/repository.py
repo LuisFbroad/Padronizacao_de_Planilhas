@@ -3,41 +3,119 @@ from sqlalchemy import func, extract
 from src.database.connection import SessionLocal
 from src.database.models import Area, Pessoa, Indicacao
 
+# =========================================================
+# FILTROS DE PERÍODO
+# =========================================================
 
-def aplicar_filtros_periodo(consulta, ano=None, mes=None, semana=None):
+
+def aplicar_filtros_periodo(
+    consulta,
+    ano=None,
+    mes=None,
+    semana=None,
+):
+    data = Indicacao.data_indicacao
+
     if ano is not None:
-        consulta = consulta.filter(
-            extract("isoyear", Indicacao.data_indicacao) == int(ano)
-        )
+        consulta = consulta.filter(extract("year", data) == int(ano))
 
     if mes is not None:
-        consulta = consulta.filter(
-            extract("month", Indicacao.data_indicacao) == int(mes)
-        )
+        consulta = consulta.filter(extract("month", data) == int(mes))
 
     if semana is not None:
+        limites = {
+            1: (1, 7),
+            2: (8, 14),
+            3: (15, 21),
+            4: (22, 31),
+        }
+
+        inicio, fim = limites[int(semana)]
+        dia = extract("day", data)
+
         consulta = consulta.filter(
-            extract("week", Indicacao.data_indicacao) == int(semana)
+            dia >= inicio,
+            dia <= fim,
         )
 
     return consulta
 
 
+def aplicar_filtro_tipo(consulta, tipo_indicacao=None):
+    if tipo_indicacao and tipo_indicacao != "Todas":
+        consulta = consulta.filter(Indicacao.tipo_indicacao == tipo_indicacao)
+
+    return consulta
+
+
+# =========================================================
+# ÁREAS
+# =========================================================
+
+
 def listar_areas():
     session = SessionLocal()
+
     try:
         return session.query(Area).order_by(Area.nome).all()
     finally:
         session.close()
 
 
+def listar_areas_com_indicacoes(
+    ano=None,
+    mes=None,
+    semana=None,
+    tipo_indicacao=None,
+):
+    session = SessionLocal()
+
+    try:
+        consulta = (
+            session.query(Area)
+            .join(
+                Indicacao,
+                Indicacao.area_id == Area.id,
+            )
+            .filter(Indicacao.processo.isnot(None))
+        )
+
+        consulta = aplicar_filtros_periodo(
+            consulta,
+            ano=ano,
+            mes=mes,
+            semana=semana,
+        )
+
+        consulta = aplicar_filtro_tipo(
+            consulta,
+            tipo_indicacao,
+        )
+
+        return consulta.distinct().order_by(Area.nome).all()
+    finally:
+        session.close()
+
+
+# =========================================================
+# PESSOAS
+# =========================================================
+
+
 def listar_pessoas_por_area(area_id):
     session = SessionLocal()
+
     try:
         return (
             session.query(Pessoa)
-            .join(Indicacao, Indicacao.pessoa_id == Pessoa.id)
-            .filter(Indicacao.area_id == area_id)
+            .join(
+                Indicacao,
+                Indicacao.pessoa_id == Pessoa.id,
+            )
+            .filter(
+                Indicacao.area_id == area_id,
+                Indicacao.processo.isnot(None),
+            )
             .distinct()
             .order_by(Pessoa.nome)
             .all()
@@ -46,16 +124,33 @@ def listar_pessoas_por_area(area_id):
         session.close()
 
 
+# =========================================================
+# ANOS E SEMANAS DISPONÍVEIS
+# =========================================================
+
+
 def listar_anos_disponiveis():
     session = SessionLocal()
+
     try:
         resultados = (
-            session.query(extract("isoyear", Indicacao.data_indicacao).label("ano"))
+            session.query(
+                extract(
+                    "year",
+                    Indicacao.data_indicacao,
+                ).label("ano")
+            )
             .filter(Indicacao.data_indicacao.isnot(None))
             .distinct()
-            .order_by(extract("isoyear", Indicacao.data_indicacao).desc())
+            .order_by(
+                extract(
+                    "year",
+                    Indicacao.data_indicacao,
+                ).desc()
+            )
             .all()
         )
+
         return [int(ano) for (ano,) in resultados if ano is not None]
     finally:
         session.close()
@@ -63,28 +158,72 @@ def listar_anos_disponiveis():
 
 def listar_semanas_disponiveis(ano=None, mes=None):
     session = SessionLocal()
+
     try:
         consulta = session.query(
-            extract("week", Indicacao.data_indicacao).label("semana")
+            extract(
+                "day",
+                Indicacao.data_indicacao,
+            ).label("dia")
         ).filter(Indicacao.data_indicacao.isnot(None))
 
-        consulta = aplicar_filtros_periodo(consulta, ano=ano, mes=mes)
+        if ano is not None:
+            consulta = consulta.filter(
+                extract(
+                    "year",
+                    Indicacao.data_indicacao,
+                )
+                == int(ano)
+            )
 
-        resultados = (
-            consulta.distinct()
-            .order_by(extract("week", Indicacao.data_indicacao))
-            .all()
-        )
+        if mes is not None:
+            consulta = consulta.filter(
+                extract(
+                    "month",
+                    Indicacao.data_indicacao,
+                )
+                == int(mes)
+            )
 
-        return [int(semana) for (semana,) in resultados if semana is not None]
+        dias = consulta.all()
+        semanas = set()
+
+        for (dia,) in dias:
+            if dia is None:
+                continue
+
+            dia = int(dia)
+
+            if dia <= 7:
+                semanas.add(1)
+            elif dia <= 14:
+                semanas.add(2)
+            elif dia <= 21:
+                semanas.add(3)
+            else:
+                semanas.add(4)
+
+        return sorted(semanas)
+
     finally:
         session.close()
 
 
+# =========================================================
+# PROCESSOS POR PESSOA
+# =========================================================
+
+
 def contar_processos_por_pessoa(
-    pessoa_id, area_id, tipo_indicacao=None, ano=None, mes=None, semana=None
+    pessoa_id,
+    area_id,
+    tipo_indicacao=None,
+    ano=None,
+    mes=None,
+    semana=None,
 ):
     session = SessionLocal()
+
     try:
         consulta = session.query(func.count(func.distinct(Indicacao.processo))).filter(
             Indicacao.pessoa_id == pessoa_id,
@@ -92,20 +231,34 @@ def contar_processos_por_pessoa(
             Indicacao.processo.isnot(None),
         )
 
-        if tipo_indicacao and tipo_indicacao != "Todas":
-            consulta = consulta.filter(Indicacao.tipo_indicacao == tipo_indicacao)
+        consulta = aplicar_filtro_tipo(
+            consulta,
+            tipo_indicacao,
+        )
 
-        consulta = aplicar_filtros_periodo(consulta, ano=ano, mes=mes, semana=semana)
+        consulta = aplicar_filtros_periodo(
+            consulta,
+            ano=ano,
+            mes=mes,
+            semana=semana,
+        )
 
         return consulta.scalar() or 0
+
     finally:
         session.close()
 
 
 def listar_processos_por_pessoa(
-    pessoa_id, area_id, tipo_indicacao=None, ano=None, mes=None, semana=None
+    pessoa_id,
+    area_id,
+    tipo_indicacao=None,
+    ano=None,
+    mes=None,
+    semana=None,
 ):
     session = SessionLocal()
+
     try:
         consulta = session.query(Indicacao.processo).filter(
             Indicacao.pessoa_id == pessoa_id,
@@ -113,47 +266,98 @@ def listar_processos_por_pessoa(
             Indicacao.processo.isnot(None),
         )
 
-        if tipo_indicacao and tipo_indicacao != "Todas":
-            consulta = consulta.filter(Indicacao.tipo_indicacao == tipo_indicacao)
+        consulta = aplicar_filtro_tipo(
+            consulta,
+            tipo_indicacao,
+        )
 
-        consulta = aplicar_filtros_periodo(consulta, ano=ano, mes=mes, semana=semana)
+        consulta = aplicar_filtros_periodo(
+            consulta,
+            ano=ano,
+            mes=mes,
+            semana=semana,
+        )
 
         resultados = consulta.distinct().order_by(Indicacao.processo).all()
+
         return [processo for (processo,) in resultados]
+
     finally:
         session.close()
 
 
-def listar_ranking(area_id, tipo_indicacao=None, ano=None, mes=None, semana=None):
+# =========================================================
+# RANKING
+# =========================================================
+
+
+def listar_ranking(
+    area_id,
+    tipo_indicacao=None,
+    ano=None,
+    mes=None,
+    semana=None,
+):
     session = SessionLocal()
+
     try:
         consulta = (
             session.query(
                 Pessoa.nome,
                 func.count(func.distinct(Indicacao.processo)).label("total_processos"),
             )
-            .join(Indicacao, Indicacao.pessoa_id == Pessoa.id)
-            .filter(Indicacao.area_id == area_id, Indicacao.processo.isnot(None))
+            .join(
+                Indicacao,
+                Indicacao.pessoa_id == Pessoa.id,
+            )
+            .filter(
+                Indicacao.area_id == area_id,
+                Indicacao.processo.isnot(None),
+            )
         )
 
-        if tipo_indicacao and tipo_indicacao != "Todas":
-            consulta = consulta.filter(Indicacao.tipo_indicacao == tipo_indicacao)
+        consulta = aplicar_filtro_tipo(
+            consulta,
+            tipo_indicacao,
+        )
 
-        consulta = aplicar_filtros_periodo(consulta, ano=ano, mes=mes, semana=semana)
+        consulta = aplicar_filtros_periodo(
+            consulta,
+            ano=ano,
+            mes=mes,
+            semana=semana,
+        )
 
         return (
-            consulta.group_by(Pessoa.id, Pessoa.nome)
-            .order_by(func.count(func.distinct(Indicacao.processo)).desc(), Pessoa.nome)
+            consulta.group_by(
+                Pessoa.id,
+                Pessoa.nome,
+            )
+            .order_by(
+                func.count(func.distinct(Indicacao.processo)).desc(),
+                Pessoa.nome,
+            )
             .all()
         )
+
     finally:
         session.close()
 
 
+# =========================================================
+# TOTAL DE PROCESSOS
+# =========================================================
+
+
 def contar_total_processos(
-    area_id=None, tipo_indicacao=None, ano=None, mes=None, semana=None
+    area_id=None,
+    tipo_indicacao=None,
+    ano=None,
+    mes=None,
+    semana=None,
 ):
     session = SessionLocal()
+
     try:
         consulta = session.query(func.count(func.distinct(Indicacao.processo))).filter(
             Indicacao.processo.isnot(None)
@@ -162,33 +366,145 @@ def contar_total_processos(
         if area_id is not None:
             consulta = consulta.filter(Indicacao.area_id == area_id)
 
-        if tipo_indicacao and tipo_indicacao != "Todas":
-            consulta = consulta.filter(Indicacao.tipo_indicacao == tipo_indicacao)
+        consulta = aplicar_filtro_tipo(
+            consulta,
+            tipo_indicacao,
+        )
 
-        consulta = aplicar_filtros_periodo(consulta, ano=ano, mes=mes, semana=semana)
+        consulta = aplicar_filtros_periodo(
+            consulta,
+            ano=ano,
+            mes=mes,
+            semana=semana,
+        )
 
         return consulta.scalar() or 0
+
     finally:
         session.close()
 
 
+# =========================================================
+# TOTAL DE PESSOAS
+# =========================================================
+
+
 def contar_total_pessoas(
-    area_id=None, tipo_indicacao=None, ano=None, mes=None, semana=None
+    area_id=None,
+    tipo_indicacao=None,
+    ano=None,
+    mes=None,
+    semana=None,
 ):
     session = SessionLocal()
+
     try:
         consulta = session.query(func.count(func.distinct(Indicacao.pessoa_id))).filter(
-            Indicacao.pessoa_id.isnot(None)
+            Indicacao.pessoa_id.isnot(None),
+            Indicacao.processo.isnot(None),
         )
 
         if area_id is not None:
             consulta = consulta.filter(Indicacao.area_id == area_id)
 
-        if tipo_indicacao and tipo_indicacao != "Todas":
-            consulta = consulta.filter(Indicacao.tipo_indicacao == tipo_indicacao)
+        consulta = aplicar_filtro_tipo(
+            consulta,
+            tipo_indicacao,
+        )
 
-        consulta = aplicar_filtros_periodo(consulta, ano=ano, mes=mes, semana=semana)
+        consulta = aplicar_filtros_periodo(
+            consulta,
+            ano=ano,
+            mes=mes,
+            semana=semana,
+        )
 
         return consulta.scalar() or 0
+
+    finally:
+        session.close()
+
+
+# =========================================================
+# RELATÓRIO AGRUPADO POR ÁREA
+# =========================================================
+
+
+def listar_relatorio_por_area(
+    ano=None,
+    mes=None,
+    semana=None,
+    tipo_indicacao=None,
+):
+    session = SessionLocal()
+
+    try:
+        consulta = (
+            session.query(
+                Area.id.label("area_id"),
+                Area.nome.label("area"),
+                func.count(func.distinct(Indicacao.processo)).label("total_processos"),
+                func.count(Indicacao.id).label("total_indicacoes"),
+            )
+            .join(
+                Indicacao,
+                Indicacao.area_id == Area.id,
+            )
+            .filter(Indicacao.processo.isnot(None))
+        )
+
+        consulta = aplicar_filtro_tipo(
+            consulta,
+            tipo_indicacao,
+        )
+
+        consulta = aplicar_filtros_periodo(
+            consulta,
+            ano=ano,
+            mes=mes,
+            semana=semana,
+        )
+
+        return (
+            consulta.group_by(
+                Area.id,
+                Area.nome,
+            )
+            .order_by(Area.nome)
+            .all()
+        )
+
+    finally:
+        session.close()
+
+
+def contar_areas_com_resultados(
+    ano=None,
+    mes=None,
+    semana=None,
+    tipo_indicacao=None,
+):
+    session = SessionLocal()
+
+    try:
+        consulta = session.query(func.count(func.distinct(Indicacao.area_id))).filter(
+            Indicacao.processo.isnot(None),
+            Indicacao.area_id.isnot(None),
+        )
+
+        consulta = aplicar_filtro_tipo(
+            consulta,
+            tipo_indicacao,
+        )
+
+        consulta = aplicar_filtros_periodo(
+            consulta,
+            ano=ano,
+            mes=mes,
+            semana=semana,
+        )
+
+        return consulta.scalar() or 0
+
     finally:
         session.close()

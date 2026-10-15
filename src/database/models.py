@@ -1,6 +1,17 @@
 from datetime import datetime
 
-from sqlalchemy import Column, Date, DateTime, ForeignKey, Integer, String
+from datetime import datetime
+
+from sqlalchemy import (
+    Column,
+    Integer,
+    String,
+    Date,
+    DateTime,
+    ForeignKey,
+    UniqueConstraint,
+)
+from sqlalchemy.orm import relationship
 from sqlalchemy.orm import relationship
 
 from src.database.connection import Base
@@ -49,3 +60,35 @@ class Indicacao(Base):
     pessoa = relationship("Pessoa", back_populates="indicacoes")
 
     area = relationship("Area", back_populates="indicacoes")
+
+
+class Processo(Base):
+    __tablename__ = "processos"
+
+    id = Column(Integer, primary_key=True)
+
+    area_id = Column(
+        Integer,
+        ForeignKey("areas.id"),
+        nullable=False,
+    )
+
+    numero = Column(String(255), nullable=False)
+    data_processo = Column(Date, nullable=True)
+    arquivo_origem = Column(String(255), nullable=True)
+
+    data_importacao = Column(
+        DateTime,
+        default=datetime.now,
+        nullable=False,
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "area_id",
+            "numero",
+            name="uq_processo_area_numero",
+        ),
+    )
+
+    area = relationship("Area")

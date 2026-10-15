@@ -1,6 +1,8 @@
 import customtkinter as ctk
-from tkinter import messagebox
-from sqlalchemy import func, extract, case
+from tkinter import filedialog, messagebox
+from sqlalchemy import func, extract
+from openpyxl import Workbook
+from openpyxl.styles import Font, PatternFill, Alignment
 
 from interface.tema import CORES
 from interface.componentes import CardIndicador, Mensagem
@@ -14,7 +16,7 @@ from src.database.repository import (
 )
 
 from src.database.connection import SessionLocal
-from src.database.models import Pessoa, Indicacao
+from src.database.models import Area, Pessoa, Indicacao, Processo
 
 
 class TelaPrincipal(ctk.CTkFrame):
@@ -30,6 +32,10 @@ class TelaPrincipal(ctk.CTkFrame):
         self.criar_interface()
         self.carregar_areas()
         self.mostrar_dashboard()
+
+    # =========================================================
+    # ESTRUTURA PRINCIPAL
+    # =========================================================
 
     def criar_interface(self):
         self.sidebar = ctk.CTkFrame(
@@ -176,11 +182,11 @@ class TelaPrincipal(ctk.CTkFrame):
         )
         self.card_areas.grid(row=0, column=2, padx=(10, 0), sticky="ew")
 
-        self.criar_filtros()
+        self.criar_filtros_dashboard()
         self.criar_area_ranking()
         self.atualizar_ranking_banco()
 
-    def criar_filtros(self):
+    def criar_filtros_dashboard(self):
         container = ctk.CTkFrame(
             self.area_principal,
             fg_color=CORES["card"],
@@ -222,6 +228,8 @@ class TelaPrincipal(ctk.CTkFrame):
 
         if self.area_selecionada:
             self.combo_areas.set(self.area_selecionada.nome)
+        elif self.areas:
+            self.combo_areas.set(self.areas[0].nome)
 
         tipo_frame = ctk.CTkFrame(
             filtros,
@@ -304,13 +312,12 @@ class TelaPrincipal(ctk.CTkFrame):
         self.card_pessoas.atualizar_valor(self.obter_total_pessoas())
 
     def obter_total_processos(self):
-        if self.area_selecionada is None:
-            return "0"
-
         try:
             return str(
                 contar_total_processos(
-                    area_id=self.area_selecionada.id,
+                    area_id=(
+                        self.area_selecionada.id if self.area_selecionada else None
+                    ),
                     tipo_indicacao=self.tipo_indicacao_selecionado,
                 )
             )
@@ -318,13 +325,12 @@ class TelaPrincipal(ctk.CTkFrame):
             return "0"
 
     def obter_total_pessoas(self):
-        if self.area_selecionada is None:
-            return "0"
-
         try:
             return str(
                 contar_total_pessoas(
-                    area_id=self.area_selecionada.id,
+                    area_id=(
+                        self.area_selecionada.id if self.area_selecionada else None
+                    ),
                     tipo_indicacao=self.tipo_indicacao_selecionado,
                 )
             )
@@ -431,23 +437,12 @@ class TelaPrincipal(ctk.CTkFrame):
         for coluna in range(3):
             filtros.grid_columnconfigure(coluna, weight=1)
 
-        ctk.CTkLabel(
-            filtros,
-            text="Ano",
-            text_color=CORES["texto"],
-        ).grid(row=0, column=0, padx=15, pady=(15, 5), sticky="w")
-
-        ctk.CTkLabel(
-            filtros,
-            text="Mês",
-            text_color=CORES["texto"],
-        ).grid(row=0, column=1, padx=15, pady=(15, 5), sticky="w")
-
-        ctk.CTkLabel(
-            filtros,
-            text="Semana",
-            text_color=CORES["texto"],
-        ).grid(row=0, column=2, padx=15, pady=(15, 5), sticky="w")
+        for coluna, titulo in enumerate(["Ano", "Mês", "Semana"]):
+            ctk.CTkLabel(
+                filtros,
+                text=titulo,
+                text_color=CORES["texto"],
+            ).grid(row=0, column=coluna, padx=15, pady=(15, 5), sticky="w")
 
         self.meses_indicadores = {
             "Todos": None,
@@ -471,7 +466,7 @@ class TelaPrincipal(ctk.CTkFrame):
         self.combo_ano_indicadores = ctk.CTkComboBox(
             filtros,
             values=valores_anos,
-            command=self.alterar_filtro_ano,
+            command=self.alterar_filtro_indicadores,
             height=36,
         )
         self.combo_ano_indicadores.grid(
@@ -482,7 +477,7 @@ class TelaPrincipal(ctk.CTkFrame):
         self.combo_mes_indicadores = ctk.CTkComboBox(
             filtros,
             values=list(self.meses_indicadores.keys()),
-            command=self.alterar_filtro_mes,
+            command=self.alterar_filtro_indicadores,
             height=36,
         )
         self.combo_mes_indicadores.grid(
@@ -493,7 +488,7 @@ class TelaPrincipal(ctk.CTkFrame):
         self.combo_semana_indicadores = ctk.CTkComboBox(
             filtros,
             values=["Todas", "1ª", "2ª", "3ª", "4ª"],
-            command=self.alterar_filtro_semana,
+            command=self.alterar_filtro_indicadores,
             height=36,
         )
         self.combo_semana_indicadores.grid(
@@ -564,13 +559,7 @@ class TelaPrincipal(ctk.CTkFrame):
 
         return ano, mes, semana
 
-    def alterar_filtro_ano(self, valor):
-        self.atualizar_indicadores()
-
-    def alterar_filtro_mes(self, valor):
-        self.atualizar_indicadores()
-
-    def alterar_filtro_semana(self, valor):
+    def alterar_filtro_indicadores(self, valor=None):
         self.atualizar_indicadores()
 
     def aplicar_filtros_periodo(
@@ -580,25 +569,26 @@ class TelaPrincipal(ctk.CTkFrame):
         mes=None,
         semana=None,
     ):
+        data = Indicacao.data_indicacao
+
         if ano is not None:
-            consulta = consulta.filter(extract("year", Indicacao.data_indicacao) == ano)
+            consulta = consulta.filter(extract("year", data) == ano)
 
         if mes is not None:
-            consulta = consulta.filter(
-                extract("month", Indicacao.data_indicacao) == mes
-            )
+            consulta = consulta.filter(extract("month", data) == mes)
 
         if semana is not None:
-            dia = extract("day", Indicacao.data_indicacao)
+            dia = extract("day", data)
 
-            if semana == 1:
-                consulta = consulta.filter(dia >= 1, dia <= 7)
-            elif semana == 2:
-                consulta = consulta.filter(dia >= 8, dia <= 14)
-            elif semana == 3:
-                consulta = consulta.filter(dia >= 15, dia <= 21)
-            elif semana == 4:
-                consulta = consulta.filter(dia >= 22)
+            limites = {
+                1: (1, 7),
+                2: (8, 14),
+                3: (15, 21),
+                4: (22, 31),
+            }
+            inicio, fim = limites[semana]
+
+            consulta = consulta.filter(dia >= inicio, dia <= fim)
 
         return consulta
 
@@ -625,7 +615,6 @@ class TelaPrincipal(ctk.CTkFrame):
             consulta = self.aplicar_filtros_periodo(consulta, ano, mes, semana)
 
             return consulta.scalar() or 0
-
         finally:
             session.close()
 
@@ -641,7 +630,6 @@ class TelaPrincipal(ctk.CTkFrame):
             consulta = self.aplicar_filtros_periodo(consulta, ano, mes, semana)
 
             return consulta.scalar() or 0
-
         finally:
             session.close()
 
@@ -661,10 +649,7 @@ class TelaPrincipal(ctk.CTkFrame):
                         "total_processos"
                     ),
                 )
-                .join(
-                    Indicacao,
-                    Indicacao.pessoa_id == Pessoa.id,
-                )
+                .join(Indicacao, Indicacao.pessoa_id == Pessoa.id)
                 .filter(Indicacao.processo.isnot(None))
             )
 
@@ -679,7 +664,6 @@ class TelaPrincipal(ctk.CTkFrame):
                 )
                 .all()
             )
-
         finally:
             session.close()
 
@@ -694,25 +678,14 @@ class TelaPrincipal(ctk.CTkFrame):
 
         try:
             total_processos = self.contar_processos_periodo(
-                ano=ano,
-                mes=mes,
-                semana=semana,
+                ano=ano, mes=mes, semana=semana
             )
-
-            total_pessoas = self.contar_pessoas_periodo(
-                ano=ano,
-                mes=mes,
-                semana=semana,
-            )
+            total_pessoas = self.contar_pessoas_periodo(ano=ano, mes=mes, semana=semana)
 
             self.card_indicadores_processos.atualizar_valor(total_processos)
             self.card_indicadores_pessoas.atualizar_valor(total_pessoas)
 
-            ranking = self.obter_ranking_indicadores(
-                ano=ano,
-                mes=mes,
-                semana=semana,
-            )
+            ranking = self.obter_ranking_indicadores(ano=ano, mes=mes, semana=semana)
 
             if not ranking:
                 Mensagem(
@@ -722,10 +695,7 @@ class TelaPrincipal(ctk.CTkFrame):
                 ).pack(pady=30)
                 return
 
-            for posicao, (nome, quantidade) in enumerate(
-                ranking,
-                start=1,
-            ):
+            for posicao, (nome, quantidade) in enumerate(ranking, start=1):
                 linha = ctk.CTkFrame(
                     self.ranking_indicadores,
                     fg_color=CORES["fundo_secundario"],
@@ -763,7 +733,7 @@ class TelaPrincipal(ctk.CTkFrame):
             ).pack(pady=30)
 
     # =========================================================
-    # RELATÓRIOS
+    # RELATÓRIOS POR ÁREA
     # =========================================================
 
     def mostrar_relatorios(self):
@@ -771,21 +741,521 @@ class TelaPrincipal(ctk.CTkFrame):
         self.limpar_area()
 
         self.criar_cabecalho(
-            "Relatórios",
-            "Área destinada aos relatórios do sistema",
+            "Relatórios por Área",
+            "Consulte e exporte os resultados por período e tipo de indicação.",
         )
 
         container = ctk.CTkFrame(
             self.area_principal,
+            fg_color="transparent",
+        )
+        container.pack(fill="both", expand=True, padx=30, pady=(0, 25))
+
+        filtros = ctk.CTkFrame(
+            container,
             fg_color=CORES["card"],
             corner_radius=12,
             border_width=1,
             border_color=CORES["borda"],
         )
-        container.pack(fill="both", expand=True, padx=30, pady=(0, 30))
+        filtros.pack(fill="x", pady=(0, 15))
 
-        Mensagem(
+        for coluna in range(4):
+            filtros.grid_columnconfigure(coluna, weight=1)
+
+        titulos = ["Ano", "Mês", "Semana", "Tipo de indicação"]
+
+        for coluna, titulo in enumerate(titulos):
+            ctk.CTkLabel(
+                filtros,
+                text=titulo,
+                text_color=CORES["texto"],
+            ).grid(
+                row=0,
+                column=coluna,
+                padx=12,
+                pady=(15, 5),
+                sticky="w",
+            )
+
+        self.meses_relatorios = {
+            "Todos": None,
+            "Janeiro": 1,
+            "Fevereiro": 2,
+            "Março": 3,
+            "Abril": 4,
+            "Maio": 5,
+            "Junho": 6,
+            "Julho": 7,
+            "Agosto": 8,
+            "Setembro": 9,
+            "Outubro": 10,
+            "Novembro": 11,
+            "Dezembro": 12,
+        }
+
+        anos = listar_anos_disponiveis()
+        valores_anos = ["Todos"] + [str(ano) for ano in anos]
+
+        self.combo_ano_relatorios = ctk.CTkComboBox(
+            filtros,
+            values=valores_anos,
+            command=self.alterar_filtro_relatorio,
+            height=36,
+        )
+        self.combo_ano_relatorios.grid(
+            row=1, column=0, padx=12, pady=(0, 15), sticky="ew"
+        )
+        self.combo_ano_relatorios.set("Todos")
+
+        self.combo_mes_relatorios = ctk.CTkComboBox(
+            filtros,
+            values=list(self.meses_relatorios.keys()),
+            command=self.alterar_filtro_relatorio,
+            height=36,
+        )
+        self.combo_mes_relatorios.grid(
+            row=1, column=1, padx=12, pady=(0, 15), sticky="ew"
+        )
+        self.combo_mes_relatorios.set("Todos")
+
+        self.combo_semana_relatorios = ctk.CTkComboBox(
+            filtros,
+            values=["Todas", "1ª", "2ª", "3ª", "4ª"],
+            command=self.alterar_filtro_relatorio,
+            height=36,
+        )
+        self.combo_semana_relatorios.grid(
+            row=1, column=2, padx=12, pady=(0, 15), sticky="ew"
+        )
+        self.combo_semana_relatorios.set("Todas")
+
+        self.combo_tipo_relatorios = ctk.CTkComboBox(
+            filtros,
+            values=[
+                "Todas",
+                "Primária",
+                "Secundária",
+                "Terciária",
+                "Quaternária",
+                "Final",
+            ],
+            command=self.alterar_filtro_relatorio,
+            height=36,
+        )
+        self.combo_tipo_relatorios.grid(
+            row=1, column=3, padx=12, pady=(0, 15), sticky="ew"
+        )
+        self.combo_tipo_relatorios.set("Todas")
+
+        cards = ctk.CTkFrame(
             container,
-            "Módulo de relatórios em desenvolvimento.",
-            tipo="normal",
-        ).pack(pady=50)
+            fg_color="transparent",
+        )
+        cards.pack(fill="x", pady=(0, 15))
+        cards.grid_columnconfigure((0, 1), weight=1)
+
+        self.card_relatorio_processos = CardIndicador(
+            cards,
+            titulo="Total de Processos",
+            valor="0",
+            icone="▣",
+        )
+        self.card_relatorio_processos.grid(row=0, column=0, padx=(0, 8), sticky="ew")
+
+        self.card_relatorio_areas = CardIndicador(
+            cards,
+            titulo="Áreas com Resultados",
+            valor="0",
+            icone="▤",
+        )
+        self.card_relatorio_areas.grid(row=0, column=1, padx=(8, 0), sticky="ew")
+
+        tabela_container = ctk.CTkFrame(
+            container,
+            fg_color=CORES["card"],
+            corner_radius=12,
+            border_width=1,
+            border_color=CORES["borda"],
+        )
+        tabela_container.pack(fill="both", expand=True)
+
+        cabecalho = ctk.CTkFrame(
+            tabela_container,
+            fg_color="transparent",
+        )
+        cabecalho.pack(fill="x", padx=20, pady=(15, 10))
+
+        ctk.CTkLabel(
+            cabecalho,
+            text="Resumo por área",
+            text_color=CORES["texto"],
+            font=ctk.CTkFont(size=17, weight="bold"),
+        ).pack(side="left")
+
+        ctk.CTkButton(
+            cabecalho,
+            text="Exportar Excel",
+            command=self.exportar_relatorio_excel,
+            height=34,
+            width=140,
+        ).pack(side="right")
+
+        self.tabela_relatorios = ctk.CTkFrame(
+            tabela_container,
+            fg_color="transparent",
+        )
+        self.tabela_relatorios.pack(fill="both", expand=True, padx=15, pady=(0, 15))
+
+        self.tabela_relatorios.grid_columnconfigure(0, weight=3)
+        self.tabela_relatorios.grid_columnconfigure(1, weight=1)
+        self.tabela_relatorios.grid_columnconfigure(2, weight=1)
+        self.tabela_relatorios.grid_rowconfigure(1, weight=1)
+
+        cabecalho_tabela = ctk.CTkFrame(
+            self.tabela_relatorios,
+            fg_color=CORES["fundo_secundario"],
+            corner_radius=6,
+        )
+        cabecalho_tabela.grid(row=0, column=0, columnspan=3, sticky="ew", pady=(0, 5))
+
+        for coluna, titulo in enumerate(["Área", "Processos", "Indicações"]):
+            cabecalho_tabela.grid_columnconfigure(
+                coluna, weight=3 if coluna == 0 else 1
+            )
+
+            ctk.CTkLabel(
+                cabecalho_tabela,
+                text=titulo,
+                text_color=CORES["texto"],
+                font=ctk.CTkFont(size=13, weight="bold"),
+                anchor="w" if coluna == 0 else "center",
+            ).grid(
+                row=0,
+                column=coluna,
+                padx=12,
+                pady=10,
+                sticky="ew",
+            )
+
+        self.linhas_relatorios = ctk.CTkScrollableFrame(
+            self.tabela_relatorios,
+            fg_color="transparent",
+        )
+        self.linhas_relatorios.grid(row=1, column=0, columnspan=3, sticky="nsew")
+
+        self.atualizar_relatorio_area()
+
+    def obter_filtros_relatorio(self):
+        ano_texto = self.combo_ano_relatorios.get()
+        mes_texto = self.combo_mes_relatorios.get()
+        semana_texto = self.combo_semana_relatorios.get()
+        tipo = self.combo_tipo_relatorios.get()
+
+        ano = int(ano_texto) if ano_texto != "Todos" else None
+        mes = self.meses_relatorios.get(mes_texto)
+
+        semanas = {
+            "1ª": 1,
+            "2ª": 2,
+            "3ª": 3,
+            "4ª": 4,
+        }
+        semana = semanas.get(semana_texto)
+
+        return ano, mes, semana, tipo
+
+    def alterar_filtro_relatorio(self, valor=None):
+        self.atualizar_relatorio_area()
+
+    def aplicar_filtros_relatorio(
+        self,
+        consulta,
+        ano=None,
+        mes=None,
+        semana=None,
+        tipo="Todas",
+    ):
+        data = Indicacao.data_indicacao
+
+        if ano is not None:
+            consulta = consulta.filter(extract("year", data) == ano)
+
+        if mes is not None:
+            consulta = consulta.filter(extract("month", data) == mes)
+
+        if semana is not None:
+            limites = {
+                1: (1, 7),
+                2: (8, 14),
+                3: (15, 21),
+                4: (22, 31),
+            }
+            inicio, fim = limites[semana]
+            dia = extract("day", data)
+            consulta = consulta.filter(dia >= inicio, dia <= fim)
+
+        if tipo != "Todas":
+            consulta = consulta.filter(Indicacao.tipo_indicacao == tipo)
+
+        return consulta
+
+    def consultar_relatorio_area(self):
+        ano, mes, semana, tipo = self.obter_filtros_relatorio()
+        session = SessionLocal()
+
+        try:
+            areas = session.query(Area).order_by(Area.nome).all()
+            resultados = []
+
+            for area in areas:
+                nome_area = (area.nome or "").strip().casefold()
+
+                if nome_area in {"projeto", "projetos"}:
+                    consulta_processos = session.query(
+                        func.count(func.distinct(Processo.numero))
+                    ).filter(
+                        Processo.area_id == area.id,
+                        Processo.numero.isnot(None),
+                        func.trim(Processo.numero) != "",
+                    )
+
+                    if ano is not None:
+                        consulta_processos = consulta_processos.filter(
+                            extract("year", Processo.data_processo) == ano
+                        )
+
+                    if mes is not None:
+                        consulta_processos = consulta_processos.filter(
+                            extract("month", Processo.data_processo) == mes
+                        )
+
+                    if semana is not None:
+                        limites = {
+                            1: (1, 7),
+                            2: (8, 14),
+                            3: (15, 21),
+                            4: (22, 31),
+                        }
+
+                        inicio, fim = limites[semana]
+                        dia = extract("day", Processo.data_processo)
+
+                        consulta_processos = consulta_processos.filter(
+                            dia >= inicio,
+                            dia <= fim,
+                        )
+
+                    total_processos = (
+                        consulta_processos.scalar() or 0
+                        if tipo == "Todas"
+                        else 0
+                    )
+
+                    total_indicacoes = 0
+
+                else:
+                    consulta = session.query(Indicacao).filter(
+                        Indicacao.area_id == area.id
+                    )
+
+                    consulta = self.aplicar_filtros_relatorio(
+                        consulta,
+                        ano=ano,
+                        mes=mes,
+                        semana=semana,
+                        tipo=tipo,
+                    )
+
+                    total_indicacoes = consulta.count()
+
+                    consulta_processos = consulta.filter(
+                        Indicacao.processo.isnot(None),
+                        func.trim(Indicacao.processo) != "",
+                    )
+
+                    total_processos = (
+                        consulta_processos.with_entities(
+                            func.count(
+                                func.distinct(Indicacao.processo)
+                            )
+                        ).scalar()
+                        or 0
+                    )
+
+                resultados.append(
+                    (
+                        area.nome,
+                        total_processos,
+                        total_indicacoes,
+                    )
+                )
+
+            total_geral_processos = sum(
+                processos for _, processos, _ in resultados
+            )
+
+            return resultados, total_geral_processos
+
+        finally:
+            session.close()
+
+    def atualizar_relatorio_area(self):
+        if not hasattr(self, "linhas_relatorios"):
+            return
+
+        for widget in self.linhas_relatorios.winfo_children():
+            widget.destroy()
+
+        try:
+            resultados, total_processos = self.consultar_relatorio_area()
+
+            self.card_relatorio_processos.atualizar_valor(total_processos)
+            total_areas_com_resultados = sum(
+                1
+                for _, processos, indicacoes in resultados
+                if processos > 0 or indicacoes > 0
+            )
+
+            self.card_relatorio_areas.atualizar_valor(
+                total_areas_com_resultados
+            )
+
+            if not resultados:
+                Mensagem(
+                    self.linhas_relatorios,
+                    "Nenhum resultado encontrado para os filtros selecionados.",
+                    tipo="alerta",
+                ).pack(pady=30)
+                return
+
+            for indice, (area, processos, indicacoes) in enumerate(resultados):
+                linha = ctk.CTkFrame(
+                    self.linhas_relatorios,
+                    fg_color=(
+                        CORES["fundo_secundario"] if indice % 2 == 0 else CORES["card"]
+                    ),
+                    corner_radius=6,
+                )
+                linha.pack(fill="x", pady=3)
+
+                for coluna in range(3):
+                    linha.grid_columnconfigure(coluna, weight=3 if coluna == 0 else 1)
+
+                valores = [area, str(processos), str(indicacoes)]
+
+                for coluna, valor in enumerate(valores):
+                    ctk.CTkLabel(
+                        linha,
+                        text=valor,
+                        text_color=CORES["texto"],
+                        font=ctk.CTkFont(
+                            size=13,
+                            weight="bold" if coluna == 0 else "normal",
+                        ),
+                        anchor="w" if coluna == 0 else "center",
+                    ).grid(
+                        row=0,
+                        column=coluna,
+                        padx=12,
+                        pady=10,
+                        sticky="ew",
+                    )
+
+        except Exception as erro:
+            Mensagem(
+                self.linhas_relatorios,
+                f"Erro ao gerar o relatório:\n{erro}",
+                tipo="erro",
+            ).pack(pady=30)
+
+    def exportar_relatorio_excel(self):
+        try:
+            resultados, total_processos = self.consultar_relatorio_area()
+
+            if not resultados:
+                messagebox.showwarning(
+                    "Relatório vazio",
+                    "Não existem dados para exportar com os filtros selecionados.",
+                )
+                return
+
+            caminho = filedialog.asksaveasfilename(
+                title="Salvar relatório por área",
+                defaultextension=".xlsx",
+                filetypes=[("Planilha Excel", "*.xlsx")],
+                initialfile="relatorio_por_area.xlsx",
+            )
+
+            if not caminho:
+                return
+
+            ano, mes, semana, tipo = self.obter_filtros_relatorio()
+
+            workbook = Workbook()
+            planilha = workbook.active
+            planilha.title = "Relatório por Área"
+
+            planilha.append(
+                [
+                    "Área",
+                    "Total de Processos",
+                    "Total de Indicações",
+                ]
+            )
+
+            for area, processos, indicacoes in resultados:
+                planilha.append([area, processos, indicacoes])
+
+            for celula in planilha[1]:
+                celula.font = Font(bold=True, color="FFFFFF")
+                celula.fill = PatternFill(
+                    fill_type="solid",
+                    fgColor="244062",
+                )
+                celula.alignment = Alignment(horizontal="center")
+
+            planilha.column_dimensions["A"].width = 30
+            planilha.column_dimensions["B"].width = 24
+            planilha.column_dimensions["C"].width = 24
+
+            planilha.append([])
+            planilha.append(["Filtros aplicados"])
+            planilha.append(
+                [
+                    "Ano",
+                    ano if ano is not None else "Todos",
+                ]
+            )
+            planilha.append(
+                [
+                    "Mês",
+                    self.combo_mes_relatorios.get(),
+                ]
+            )
+            planilha.append(
+                [
+                    "Semana",
+                    self.combo_semana_relatorios.get(),
+                ]
+            )
+            planilha.append(["Tipo de indicação", tipo])
+            planilha.append(
+                [
+                    "Total geral de processos",
+                    total_processos,
+                ]
+            )
+
+            workbook.save(caminho)
+
+            messagebox.showinfo(
+                "Exportação concluída",
+                f"Relatório salvo com sucesso em:\n\n{caminho}",
+            )
+
+        except Exception as erro:
+            messagebox.showerror(
+                "Erro na exportação",
+                f"Não foi possível exportar o relatório:\n\n{erro}",
+            )

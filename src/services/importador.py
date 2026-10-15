@@ -1,10 +1,14 @@
 from pathlib import Path
+from datetime import date, datetime
+import re
 import unicodedata
 
 import pandas as pd
+from sqlalchemy import func
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from src.database.connection import SessionLocal
-from src.database.models import Pessoa, Area, Indicacao
+from src.database.models import Area, Pessoa, Indicacao, Processo
 
 PASTA_DADOS = Path("__Agosto_Padrão__")
 
@@ -19,275 +23,518 @@ COLUNAS_INDICACAO = {
 }
 
 
-AREAS = {
-    "CIV": "Cível",
-    "PREV": "Previdenciário",
-    "PROJ": "Projetos",
-    "REV": "Revisão",
-    "TRAB": "Trabalhista",
+AREAS_ARQUIVOS = {
+    "CIV": {
+        "nome": "Civil",
+        "alternativas": ["Civil", "Cível"],
+    },
+    "PREV": {
+        "nome": "Previdencia",
+        "alternativas": [
+            "Previdencia",
+            "Previdência",
+            "Previdenciário",
+            "Previdenciária",
+        ],
+    },
+    "PROJ": {
+        "nome": "Projeto",
+        "alternativas": ["Projeto", "Projetos"],
+    },
+    "REV": {
+        "nome": "Restituição",
+        "alternativas": ["Restituição", "Restituicao", "Revisão", "Revisao"],
+    },
+    "TRAB": {
+        "nome": "Trabalhista",
+        "alternativas": ["Trabalhista"],
+    },
 }
 
 
 def normalizar_texto(valor):
-    texto = str(valor).strip().upper()
-    texto = unicodedata.normalize("NFKD", texto)
+    if valor is None:
+        return ""
 
-    return "".join(
+    texto = str(valor).strip()
+
+    texto = unicodedata.normalize("NFKD", texto)
+    texto = "".join(
         caractere for caractere in texto if not unicodedata.combining(caractere)
     )
 
+    texto = texto.upper()
+    texto = re.sub(r"[^A-Z0-9]+", " ", texto)
+
+    return " ".join(texto.split())
+
+
+def normalizar_nome(nome):
+    if nome is None or pd.isna(nome):
+        return ""
+
+    return " ".join(str(nome).strip().split())
+
 
 def limpar_valor(valor):
-    if pd.isna(valor):
+    if valor is None:
         return None
 
-    valor = str(valor).strip()
+    try:
+        if pd.isna(valor):
+            return None
+    except (TypeError, ValueError):
+        pass
 
-    if not valor or valor.lower() == "nan":
+    if isinstance(valor, float) and valor.is_integer():
+        valor = int(valor)
+
+    texto = str(valor).strip()
+
+    if not texto or texto.lower() in {"nan", "none", "null"}:
         return None
 
-    return valor
+    return texto
 
 
-def identificar_area(nome_arquivo):
-    nome = normalizar_texto(nome_arquivo)
+def normalizar_coluna(coluna):
+    return normalizar_texto(coluna)
 
-    for sigla, area in AREAS.items():
-        if f"_{sigla}_" in nome:
-            return area
+
+def preparar_linha(linha):
+    dados = {}
+
+    for coluna, valor in linha.items():
+        chave = normalizar_coluna(coluna)
+
+        if chave:
+            dados[chave] = valor
+
+    return dados
+
+
+def obter_campo(dados, alternativas):
+    for alternativa in alternativas:
+        chave = normalizar_coluna(alternativa)
+
+        if chave in dados:
+            valor = limpar_valor(dados[chave])
+
+            if valor is not None:
+                return valor
 
     return None
 
 
-def buscar_ou_criar_pessoa(session, nome):
-    pessoa = session.query(Pessoa).filter(Pessoa.nome == nome).first()
+def identificar_area(nome_arquivo):
+    nome = nome_arquivo.upper()
 
-    if pessoa:
-        return pessoa
+    for sigla, configuracao in AREAS_ARQUIVOS.items():
+        if f"_{sigla}_" in nome:
+            return configuracao
 
-    pessoa = Pessoa(nome=nome)
-    session.add(pessoa)
+    return None
+
+
+def buscar_area(session, configuracao):
+    alternativas = configuracao["alternativas"]
+
+    nomes_normalizados = {normalizar_texto(nome) for nome in alternativas}
+
+    areas = session.query(Area).all()
+
+    for area in areas:
+        if normalizar_texto(area.nome) in nomes_normalizados:
+            return area
+
+    area = Area(nome=configuracao["nome"])
+    session.add(area)
     session.flush()
-
-    return pessoa
-
-
-def buscar_area(session, nome_area):
-    area = session.query(Area).filter(Area.nome == nome_area).first()
-
-    if not area:
-        raise ValueError(f"Área '{nome_area}' não encontrada no banco.")
 
     return area
 
 
-def obter_colunas_normalizadas(df):
-    mapa = {}
+def buscar_ou_criar_pessoa(session, nome):
+    nome = normalizar_nome(nome)
 
-    for coluna in df.columns:
-        mapa[normalizar_texto(coluna)] = coluna
-
-    return mapa
-
-
-def obter_valor_coluna(linha, mapa_colunas, nome_coluna):
-    chave = normalizar_texto(nome_coluna)
-    coluna_real = mapa_colunas.get(chave)
-
-    if coluna_real is None:
+    if not nome:
         return None
 
-    return linha.get(coluna_real)
+    nome_normalizado = normalizar_texto(nome)
+
+    if not nome_normalizado:
+        return None
+
+    # Primeiro verifica pessoas que já estão pendentes
+    # de gravação nesta sessão.
+    for objeto in session.new:
+        if isinstance(objeto, Pessoa):
+            if normalizar_texto(objeto.nome) == nome_normalizado:
+                return objeto
+
+    # Pesquisa sem provocar flush automático de outros objetos.
+    with session.no_autoflush:
+        pessoa = (
+            session.query(Pessoa)
+            .filter(func.upper(func.trim(Pessoa.nome)) == nome.upper().strip())
+            .first()
+        )
+
+    if pessoa:
+        return pessoa
+
+    # O PostgreSQL ignora o INSERT se o nome exato já existir.
+    # Isso evita a violação da restrição pessoas_nome_key.
+    comando = (
+        pg_insert(Pessoa)
+        .values(nome=nome)
+        .on_conflict_do_nothing(index_elements=[Pessoa.nome])
+    )
+
+    session.execute(comando)
+
+    # Busca novamente o registro, inclusive se ele já existia.
+    with session.no_autoflush:
+        pessoa = (
+            session.query(Pessoa)
+            .filter(func.upper(func.trim(Pessoa.nome)) == nome.upper().strip())
+            .first()
+        )
+
+    if pessoa:
+        return pessoa
+
+    # Caso tenha ocorrido uma concorrência ou uma variação
+    # inesperada no registro, informa o problema sem esconder
+    # o erro original do banco.
+    raise RuntimeError(f"Não foi possível localizar ou cadastrar a pessoa: {nome}")
 
 
-def obter_processo(linha, mapa_colunas):
-    processo = limpar_valor(
-        obter_valor_coluna(
-            linha,
-            mapa_colunas,
+def obter_processo(dados):
+    return obter_campo(
+        dados,
+        [
+            "N do Processo",
             "Nº do Processo",
-        )
-    )
-
-    if processo:
-        return processo
-
-    return limpar_valor(
-        obter_valor_coluna(
-            linha,
-            mapa_colunas,
+            "N° do Processo",
+            "Numero do Processo",
+            "Número do Processo",
+            "Processo",
             "PRC/RPV",
+        ],
+    )
+
+
+def obter_numero_rpv(dados):
+    return obter_campo(
+        dados,
+        [
+            "PRC/RPV",
+            "N do Processo",
+            "Nº do Processo",
+            "N° do Processo",
+            "Numero do Processo",
+            "Número do Processo",
+            "Processo",
+        ],
+    )
+
+
+def obter_data(dados):
+    valor = obter_campo(
+        dados,
+        [
+            "Data",
+            "Data do Processo",
+            "Data da Indicação",
+        ],
+    )
+
+    if not valor:
+        return None
+
+    try:
+        data_convertida = pd.to_datetime(
+            valor,
+            dayfirst=True,
+            errors="coerce",
         )
-    )
 
+        if pd.isna(data_convertida):
+            return None
 
-def obter_data_indicacao(linha, mapa_colunas):
-    valor = obter_valor_coluna(
-        linha,
-        mapa_colunas,
-        "Data",
-    )
+        return data_convertida.date()
 
-    if valor is None or pd.isna(valor):
+    except (TypeError, ValueError):
         return None
 
-    data = pd.to_datetime(
-        valor,
-        errors="coerce",
-        dayfirst=True,
-    )
 
-    if pd.isna(data):
-        return None
-
-    return data.date()
-
-
-def obter_indicacoes(linha, mapa_colunas):
+def obter_indicacoes(dados):
     indicacoes = []
 
-    for coluna_normalizada, tipo in COLUNAS_INDICACAO.items():
-        coluna_real = mapa_colunas.get(coluna_normalizada)
-
-        if coluna_real is None:
-            continue
-
-        valor = limpar_valor(linha.get(coluna_real))
+    for coluna, tipo in COLUNAS_INDICACAO.items():
+        valor = obter_campo(dados, [coluna])
 
         if not valor:
             continue
 
-        for parte in valor.split("/"):
-            nome = parte.strip()
+        # As planilhas podem separar várias pessoas por "/".
+        partes = str(valor).split("/")
 
-            if nome:
-                indicacoes.append(
-                    {
-                        "nome": nome,
-                        "tipo": tipo,
-                    }
-                )
+        for parte in partes:
+            nome = normalizar_nome(parte)
+
+            if not nome:
+                continue
+
+            if normalizar_texto(nome) in {
+                "NAN",
+                "NONE",
+                "NULL",
+                "N A",
+            }:
+                continue
+
+            indicacoes.append(
+                {
+                    "nome": nome,
+                    "tipo": tipo,
+                }
+            )
 
     return indicacoes
 
 
-def importar_planilha(caminho, session):
-    nome_arquivo = caminho.name
-    area_nome = identificar_area(nome_arquivo)
+def buscar_ou_criar_processo(
+    session,
+    area,
+    numero,
+    data_processo,
+    nome_arquivo,
+    chaves_processos_pendentes,
+):
+    numero = limpar_valor(numero)
 
-    if not area_nome:
+    if not numero:
+        return False
+
+    chave = (
+        area.id,
+        normalizar_texto(numero),
+    )
+
+    if chave in chaves_processos_pendentes:
+        return False
+
+    processo_existente = (
+        session.query(Processo)
+        .filter(
+            Processo.area_id == area.id,
+            Processo.numero == numero,
+        )
+        .first()
+    )
+
+    if processo_existente:
+        chaves_processos_pendentes.add(chave)
+        return False
+
+    processo = Processo(
+        area_id=area.id,
+        numero=numero,
+        data_processo=data_processo,
+        arquivo_origem=nome_arquivo,
+    )
+
+    session.add(processo)
+    session.flush()
+
+    chaves_processos_pendentes.add(chave)
+
+    return True
+
+
+def indicacao_existe(
+    session,
+    pessoa_id,
+    area_id,
+    processo,
+    tipo,
+    data_indicacao,
+    nome_arquivo,
+):
+    consulta = session.query(Indicacao).filter(
+        Indicacao.pessoa_id == pessoa_id,
+        Indicacao.area_id == area_id,
+        Indicacao.tipo_indicacao == tipo,
+    )
+
+    if processo:
+        consulta = consulta.filter(Indicacao.processo == processo)
+    else:
+        consulta = consulta.filter(
+            Indicacao.processo.is_(None),
+            Indicacao.arquivo_origem == nome_arquivo,
+        )
+
+        if data_indicacao:
+            consulta = consulta.filter(Indicacao.data_indicacao == data_indicacao)
+        else:
+            consulta = consulta.filter(Indicacao.data_indicacao.is_(None))
+
+    return consulta.first() is not None
+
+
+def importar_planilha(
+    caminho,
+    session,
+    chaves_indicacoes_pendentes,
+    chaves_processos_pendentes,
+):
+    nome_arquivo = caminho.name
+    configuracao = identificar_area(nome_arquivo)
+
+    if not configuracao:
         print(f"[AVISO] Área não identificada: {nome_arquivo}")
-        return 0
+        return 0, 0
+
+    area = buscar_area(session, configuracao)
 
     print()
     print("=" * 80)
     print(f"ARQUIVO: {nome_arquivo}")
-    print(f"ÁREA: {area_nome}")
+    print(f"ÁREA IDENTIFICADA: {area.nome}")
     print("=" * 80)
 
     df = pd.read_excel(caminho, header=3)
 
-    mapa_colunas = obter_colunas_normalizadas(df)
-    area = buscar_area(session, area_nome)
-
-    total_processos = 0
     total_indicacoes = 0
+    total_processos = 0
+    total_linhas_com_indicacao = 0
 
-    # Evita processar a mesma indicação duas vezes
-    # durante a importação das planilhas atuais.
-    indicacoes_processadas = set()
+    eh_projeto = "PROJ" in nome_arquivo.upper()
+    eh_trabalhista = "TRAB" in nome_arquivo.upper()
 
     for _, linha in df.iterrows():
-        processo = obter_processo(linha, mapa_colunas)
-        data_indicacao = obter_data_indicacao(
-            linha,
-            mapa_colunas,
-        )
-        indicacoes = obter_indicacoes(
-            linha,
-            mapa_colunas,
-        )
+        dados = preparar_linha(linha)
 
-        if not processo or not indicacoes:
-            continue
+        numero_processo = obter_processo(dados)
+        numero_rpv = obter_numero_rpv(dados)
+        data_processo = obter_data(dados)
+        indicacoes = obter_indicacoes(dados)
 
-        total_processos += 1
-
-        for indicacao_data in indicacoes:
-            nome = indicacao_data["nome"]
-            tipo = indicacao_data["tipo"]
-
-            pessoa = buscar_ou_criar_pessoa(
-                session,
-                nome,
+        # PROJETO:
+        # importa os processos/RPVs mesmo sem indicadores.
+        if eh_projeto and numero_rpv:
+            inserido = buscar_ou_criar_processo(
+                session=session,
+                area=area,
+                numero=numero_rpv,
+                data_processo=data_processo,
+                nome_arquivo=nome_arquivo,
+                chaves_processos_pendentes=chaves_processos_pendentes,
             )
 
-            # A data não faz parte da chave.
+            if inserido:
+                total_processos += 1
+
+        # Se não há nomes de indicadores, não cria pessoas
+        # nem indicações fictícias.
+        if not indicacoes:
+            continue
+
+        total_linhas_com_indicacao += 1
+
+        # TRABALHISTA:
+        # importa as indicações das pessoas mesmo quando
+        # a planilha não possui número de processo.
+        if eh_trabalhista:
+            processo_indicacao = numero_processo
+        else:
+            processo_indicacao = numero_processo
+
+            # As demais áreas só geram indicações quando
+            # há um processo associado.
+            if not processo_indicacao:
+                continue
+
+        for item in indicacoes:
+            nome = item["nome"]
+            tipo = item["tipo"]
+
+            pessoa = buscar_ou_criar_pessoa(session, nome)
+
+            if pessoa is None:
+                continue
+
             chave = (
                 pessoa.id,
                 area.id,
-                processo,
+                processo_indicacao,
                 tipo,
+                data_processo if not processo_indicacao else None,
+                nome_arquivo if not processo_indicacao else None,
             )
 
-            if chave in indicacoes_processadas:
+            # Impede duplicidade na própria execução,
+            # inclusive para indicações sem processo.
+            if chave in chaves_indicacoes_pendentes:
                 continue
 
-            # Procura uma indicação existente no banco,
-            # independentemente da data registrada.
-            consulta = (
-                session.query(Indicacao)
-                .filter(
-                    Indicacao.pessoa_id == pessoa.id,
-                    Indicacao.area_id == area.id,
-                    Indicacao.processo == processo,
-                    Indicacao.tipo_indicacao == tipo,
-                )
-                .first()
-            )
-
-            if consulta:
-                # Atualiza a data somente se a planilha
-                # apresentar uma data válida.
-                if data_indicacao is not None:
-                    consulta.data_indicacao = data_indicacao
-
-                indicacoes_processadas.add(chave)
+            if indicacao_existe(
+                session=session,
+                pessoa_id=pessoa.id,
+                area_id=area.id,
+                processo=processo_indicacao,
+                tipo=tipo,
+                data_indicacao=data_processo,
+                nome_arquivo=nome_arquivo,
+            ):
+                chaves_indicacoes_pendentes.add(chave)
                 continue
 
-            # Cria somente indicações que ainda não existem.
             indicacao = Indicacao(
                 pessoa_id=pessoa.id,
                 area_id=area.id,
-                processo=processo,
+                processo=processo_indicacao,
                 tipo_indicacao=tipo,
-                data_indicacao=data_indicacao,
+                data_indicacao=data_processo,
                 arquivo_origem=nome_arquivo,
             )
 
             session.add(indicacao)
-            indicacoes_processadas.add(chave)
+            chaves_indicacoes_pendentes.add(chave)
             total_indicacoes += 1
 
-    print(f"Processos com indicação: {total_processos}")
-    print(f"Indicações inseridas: {total_indicacoes}")
+    print(f"Linhas com indicação: {total_linhas_com_indicacao}")
+    print(f"Processos/RPVs novos: {total_processos}")
+    print(f"Indicações novas: {total_indicacoes}")
 
-    return total_indicacoes
+    return total_indicacoes, total_processos
 
 
 def importar_todas():
     if not PASTA_DADOS.exists():
-        print(f"Pasta não encontrada: {PASTA_DADOS}")
+        print(f"[ERRO] Pasta não encontrada: {PASTA_DADOS.resolve()}")
         return
 
-    arquivos = sorted(PASTA_DADOS.glob("*.xlsx"))
+    arquivos = sorted(
+        arquivo
+        for arquivo in PASTA_DADOS.glob("*.xlsx")
+        if not arquivo.name.startswith("~$")
+    )
 
     if not arquivos:
-        print("Nenhuma planilha encontrada.")
+        print(f"Nenhuma planilha encontrada em: {PASTA_DADOS.resolve()}")
         return
 
     session = SessionLocal()
-    total_geral = 0
+
+    total_geral_indicacoes = 0
+    total_geral_processos = 0
+
+    chaves_indicacoes_pendentes = set()
+    chaves_processos_pendentes = set()
 
     try:
         print("=" * 80)
@@ -296,10 +543,15 @@ def importar_todas():
         print(f"Planilhas encontradas: {len(arquivos)}")
 
         for arquivo in arquivos:
-            total_geral += importar_planilha(
-                arquivo,
-                session,
+            novas_indicacoes, novos_processos = importar_planilha(
+                caminho=arquivo,
+                session=session,
+                chaves_indicacoes_pendentes=chaves_indicacoes_pendentes,
+                chaves_processos_pendentes=chaves_processos_pendentes,
             )
+
+            total_geral_indicacoes += novas_indicacoes
+            total_geral_processos += novos_processos
 
         session.commit()
 
@@ -307,13 +559,17 @@ def importar_todas():
         print("=" * 80)
         print("IMPORTAÇÃO CONCLUÍDA")
         print("=" * 80)
-        print(f"Total de indicações inseridas: {total_geral}")
+        print(f"Total de indicações inseridas: {total_geral_indicacoes}")
+        print(f"Total de processos/RPVs inseridos: {total_geral_processos}")
 
     except Exception as erro:
         session.rollback()
 
-        print("ERRO DURANTE A IMPORTAÇÃO")
-        print(erro)
+        print()
+        print("=" * 80)
+        print("[ERRO] A importação foi cancelada.")
+        print("=" * 80)
+        print(f"Detalhes: {erro}")
 
         raise
 

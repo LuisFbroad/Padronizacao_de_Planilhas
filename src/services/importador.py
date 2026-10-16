@@ -9,7 +9,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from src.database.connection import SessionLocal
 from src.database.models import Area, Pessoa, Indicacao, Processo
 
-PASTA_DADOS = Path("__Agosto_Padrão__")
+PASTA_DADOS = Path("__Planilhas_Padrao__")
 
 
 COLUNAS_INDICACAO = {
@@ -536,69 +536,80 @@ def importar_planilha(
     return total_indicacoes, total_processos
 
 
-def importar_todas():
-    if not PASTA_DADOS.exists():
-        print(f"[ERRO] Pasta não encontrada: {PASTA_DADOS.resolve()}")
-        return
+def importar_todas(pasta_origem=None):
+    """
+    Importa todas as planilhas compatíveis de uma pasta para o PostgreSQL.
+
+    Se nenhuma pasta for informada, mantém a pasta padrão antiga.
+    """
+    from pathlib import Path
+
+    pasta = Path(pasta_origem) if pasta_origem else PASTA_DADOS
+    pasta = pasta.expanduser().resolve()
+
+    if not pasta.exists() or not pasta.is_dir():
+        raise FileNotFoundError(f"Pasta de origem não encontrada: {pasta}")
+
+    extensoes = {".xlsx", ".xlsm", ".xls"}
 
     arquivos = sorted(
-        arquivo
-        for arquivo in PASTA_DADOS.glob("*.xlsx")
-        if not arquivo.name.startswith("~$")
+        (
+            arquivo
+            for arquivo in pasta.iterdir()
+            if arquivo.is_file()
+            and arquivo.suffix.lower() in extensoes
+            and not arquivo.name.startswith("~$")
+        ),
+        key=lambda arquivo: arquivo.name.lower(),
     )
 
     if not arquivos:
-        print(f"Nenhuma planilha encontrada em: {PASTA_DADOS.resolve()}")
-        return
+        raise FileNotFoundError(
+            f"Nenhuma planilha Excel compatível encontrada em:\n{pasta}"
+        )
 
     session = SessionLocal()
-
-    total_geral_indicacoes = 0
-    total_geral_processos = 0
+    total_indicacoes = 0
+    total_processos = 0
 
     chaves_indicacoes_pendentes = set()
     chaves_processos_pendentes = set()
 
     try:
-        print("=" * 80)
+        print("=" * 70)
         print("IMPORTAÇÃO DAS PLANILHAS")
-        print("=" * 80)
-        print(f"Planilhas encontradas: {len(arquivos)}")
+        print("=" * 70)
+        print(f"Pasta de origem: {pasta}")
+        print(f"Arquivos encontrados: {len(arquivos)}")
 
         for arquivo in arquivos:
+            print(f"\nProcessando: {arquivo.name}")
+
             novas_indicacoes, novos_processos = importar_planilha(
                 caminho=arquivo,
                 session=session,
-                chaves_indicacoes_pendentes=chaves_indicacoes_pendentes,
-                chaves_processos_pendentes=chaves_processos_pendentes,
+                chaves_indicacoes_pendentes=(chaves_indicacoes_pendentes),
+                chaves_processos_pendentes=(chaves_processos_pendentes),
             )
 
-            total_geral_indicacoes += novas_indicacoes
-            total_geral_processos += novos_processos
+            total_indicacoes += novas_indicacoes
+            total_processos += novos_processos
 
         session.commit()
 
-        print()
-        print("=" * 80)
-        print("IMPORTAÇÃO CONCLUÍDA")
-        print("=" * 80)
-        print(f"Total de indicações inseridas: " f"{total_geral_indicacoes}")
-        print(f"Total de processos/RPVs inseridos: " f"{total_geral_processos}")
+        print("\nIMPORTAÇÃO CONCLUÍDA")
+        print(f"Indicações novas: {total_indicacoes}")
+        print(f"Processos/RPVs novos: {total_processos}")
 
-    except Exception as erro:
+        return {
+            "arquivos": len(arquivos),
+            "indicacoes": total_indicacoes,
+            "processos": total_processos,
+        }
+
+    except Exception:
         session.rollback()
-
-        print()
-        print("=" * 80)
-        print("[ERRO] A importação foi cancelada.")
-        print("=" * 80)
-        print(f"Detalhes: {erro}")
-
         raise
 
     finally:
         session.close()
-
-
-if __name__ == "__main__":
-    importar_todas()

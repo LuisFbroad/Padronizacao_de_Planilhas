@@ -5,7 +5,7 @@ import pandas as pd
 from src.database.connection import SessionLocal
 from src.database.models import Pessoa, Area, Indicacao
 
-PASTA_DADOS = Path("__Agosto_Padrão__")
+PASTA_DADOS = Path("__Planilhas_Padrao__")
 
 COLUNAS_INDICACAO = [
     "INDICAÇÃO PRIMÁRIA",

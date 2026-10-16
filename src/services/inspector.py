@@ -2,7 +2,7 @@ import pandas as pd
 from pathlib import Path
 
 
-PASTA_DADOS = Path("__Agosto_Padrão__")
+PASTA_DADOS = Path("__Planilhas_Padrao__")
 
 COLUNAS_INDICACAO = [
     "INDICAÇÃO PRIMÁRIA",

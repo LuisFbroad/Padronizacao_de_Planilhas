@@ -200,7 +200,3 @@ def importar_todas():
 
     finally:
         session.close()
-
-
-if __name__ == "__main__":
-    importar_todas()

@@ -45,9 +45,7 @@ class TelaPrincipal(ctk.CTkFrame):
         self.mostrar_dashboard()
 
     # =========================================================
-
     # ESTRUTURA PRINCIPAL
-
     # =========================================================
 
     def criar_interface(self):
@@ -168,9 +166,7 @@ class TelaPrincipal(ctk.CTkFrame):
             )
 
     # =========================================================
-
     # DASHBOARD
-
     # =========================================================
 
     def mostrar_dashboard(self):
@@ -521,9 +517,7 @@ class TelaPrincipal(ctk.CTkFrame):
             ).pack(side="right", padx=15)
 
     # =========================================================
-
     # INDICADORES
-
     # =========================================================
 
     def mostrar_indicadores(self):
@@ -944,9 +938,7 @@ class TelaPrincipal(ctk.CTkFrame):
             ).pack(pady=30)
 
     # =========================================================
-
     # RELATÓRIOS POR ÁREA
-
     # =========================================================
 
     def mostrar_relatorios(self):

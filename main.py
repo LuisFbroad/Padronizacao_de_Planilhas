@@ -1,31 +1,29 @@
-import customtkinter as ctk
-from interface.tela_principal import TelaPrincipal
-from src.services.importador import importar_todas
+
+import traceback
+from tkinter import messagebox
 
 
 def main():
-    print("=" * 60)
-    print("SISTEMA DE INDICAÇÕES")
-    print("Atualizando informações das planilhas...")
-    print("=" * 60)
-
     try:
-        importar_todas()
+        # Abre a interface principal sem importar planilhas automaticamente.
+        from interface.app import iniciar_aplicacao
+
+        iniciar_aplicacao()
+
     except Exception as erro:
-        print(f"Erro ao atualizar as planilhas: {erro}")
-        input("Pressione Enter para sair...")
-        return
+        traceback.print_exc()
 
-    print("Atualização concluída. Abrindo o sistema...")
-
-    app = ctk.CTk()
-    app.title("Sistema de Indicações")
-    app.geometry("1200x750")
-
-    tela = TelaPrincipal(app)
-    tela.pack(fill="both", expand=True)
-
-    app.mainloop()
+        try:
+            messagebox.showerror(
+                "Erro ao iniciar o Sistema GAGC",
+                (
+                    "Não foi possível abrir a interface.\n\n"
+                    f"Erro: {erro}\n\n"
+                    "Consulte o terminal para ver os detalhes."
+                ),
+            )
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":

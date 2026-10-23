@@ -1,0 +1,88 @@
+﻿
+backups\
+  backups\sistema_indicacoes_2026-10-16_13-17-24.dump
+  backups\sistema_indicacoes_2026-10-16_13-19-26.dump
+  backups\sistema_indicacoes_antes_correcao_2026-10-23_13-44-25.dump
+
+config\
+  config\settings.py
+
+data\
+  data\entrada\.gitkeep
+  data\entrada\RELATORIO MENSAL PADRÃO.xlsx
+  data\entrada\RELATORIO_MENSAL_PADRONIZADO_CIV_AGO2026.xlsx
+  data\entrada\RELATORIO_MENSAL_PADRONIZADO_PREV_AGO2026.xlsx
+  data\entrada\RELATORIO_MENSAL_PADRONIZADO_PROJ_AGO2026.xlsx
+  data\entrada\RELATORIO_MENSAL_PADRONIZADO_REV_AGO2026.xlsx
+  data\entrada\RELATORIO_MENSAL_PADRONIZADO_TRAB_AGO2026.xlsx
+  data\processados\.gitkeep
+  data\saida\.gitkeep
+
+interface\
+  interface\app.py
+  interface\componentes.py
+  interface\tela_principal.py
+  interface\tema.py
+  interface\__init__.py
+
+logs\
+  logs\sistema.log
+  logs\__init__.py
+
+model\
+  model\registro.py
+  model\__init__.py
+
+src\
+  src\logger.py
+  src\__init__.py
+  src\database\connection.py
+  src\database\models.py
+  src\database\repository.py
+  src\database\repository.py.backup
+  src\database\__init__.py
+  src\excel\identificador.py
+  src\excel\leitor.py
+  src\excel\padronizador.py
+  src\excel\tipos_planilha.py
+  src\excel\validador.py
+  src\excel\__init__.py
+  src\services\backup.py
+  src\services\importador.py
+  src\services\importador.py.backup
+  src\services\indicadores.py
+  src\services\inspector.py
+  src\services\pesquisa.py
+  src\services\__init__.py
+
+__Padrão\
+  __Padrão\RELATORIO MENSAL PADRÃO.xlsx
+
+__Planilhas\
+  __Planilhas\PLANILHA GASTOS E RECEITAS - CIV. - AGO.2026.xlsx
+  __Planilhas\PLANILHA GASTOS E RECEITAS - PREV. - AGO.2026.xlsx
+  __Planilhas\PLANILHA GASTOS E RECEITAS - PROJ. - AGO.2026.xlsx
+  __Planilhas\PLANILHA GASTOS E RECEITAS - REV. - AGO.2026.xlsx
+  __Planilhas\PLANILHA GASTOS E RECEITAS - TRAB. - AGO.2026.xlsx
+
+__Planilhas_Padrao__\
+  __Planilhas_Padrao__\RELATORIO_MENSAL_PADRONIZADO_CIV_AGO2026.xlsx
+  __Planilhas_Padrao__\RELATORIO_MENSAL_PADRONIZADO_PREV_AGO2026.xlsx
+  __Planilhas_Padrao__\RELATORIO_MENSAL_PADRONIZADO_PROJ_AGO2026.xlsx
+  __Planilhas_Padrao__\RELATORIO_MENSAL_PADRONIZADO_REV_AGO2026.xlsx
+  __Planilhas_Padrao__\RELATORIO_MENSAL_PADRONIZADO_TRAB_AGO2026.xlsx
+.env
+.gitignore
+comparar_datas_projeto.py
+comparar_projeto.py
+diagnostico_banco.py
+diagnostico_indicacoes.py
+diagnostico_projeto.py
+diagnostico_projeto_detalhado.py
+diagnostico_projeto_original.py
+estrutura_projeto_limpa.txt
+investigar_data_projeto.py
+main.py
+PadronizacaoPlanilhas.spec
+README.md
+requirements.txt

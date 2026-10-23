@@ -16,6 +16,7 @@ def aplicar_filtros_periodo(
 ):
     data = Indicacao.data_indicacao
 
+    # Datas nulas ficam naturalmente fora dos filtros de período.
     if ano is not None:
         consulta = consulta.filter(extract("year", data) == int(ano))
 
@@ -71,13 +72,10 @@ def listar_areas_com_indicacoes(
     session = SessionLocal()
 
     try:
-        consulta = (
-            session.query(Area)
-            .join(
-                Indicacao,
-                Indicacao.area_id == Area.id,
-            )
-            .filter(Indicacao.processo.isnot(None))
+        # Inclui indicações com e sem número de processo.
+        consulta = session.query(Area).join(
+            Indicacao,
+            Indicacao.area_id == Area.id,
         )
 
         consulta = aplicar_filtros_periodo(
@@ -106,6 +104,7 @@ def listar_pessoas_por_area(area_id):
     session = SessionLocal()
 
     try:
+        # Pessoas com indicações sem processo também são listadas.
         return (
             session.query(Pessoa)
             .join(
@@ -114,7 +113,6 @@ def listar_pessoas_por_area(area_id):
             )
             .filter(
                 Indicacao.area_id == area_id,
-                Indicacao.processo.isnot(None),
             )
             .distinct()
             .order_by(Pessoa.nome)
@@ -225,6 +223,7 @@ def contar_processos_por_pessoa(
     session = SessionLocal()
 
     try:
+        # Processo sem identificação não é contado como processo.
         consulta = session.query(func.count(func.distinct(Indicacao.processo))).filter(
             Indicacao.pessoa_id == pessoa_id,
             Indicacao.area_id == area_id,
@@ -301,10 +300,16 @@ def listar_ranking(
     session = SessionLocal()
 
     try:
+        # Inclui pessoas com indicação sem processo.
+        # O total_processos dessas pessoas pode ser zero.
+        total_processos = func.count(func.distinct(Indicacao.processo)).label(
+            "total_processos"
+        )
+
         consulta = (
             session.query(
                 Pessoa.nome,
-                func.count(func.distinct(Indicacao.processo)).label("total_processos"),
+                total_processos,
             )
             .join(
                 Indicacao,
@@ -312,7 +317,6 @@ def listar_ranking(
             )
             .filter(
                 Indicacao.area_id == area_id,
-                Indicacao.processo.isnot(None),
             )
         )
 
@@ -399,9 +403,9 @@ def contar_total_pessoas(
     session = SessionLocal()
 
     try:
+        # Conta pessoas com indicação, mesmo sem processo.
         consulta = session.query(func.count(func.distinct(Indicacao.pessoa_id))).filter(
-            Indicacao.pessoa_id.isnot(None),
-            Indicacao.processo.isnot(None),
+            Indicacao.pessoa_id.isnot(None)
         )
 
         if area_id is not None:
@@ -439,18 +443,14 @@ def listar_relatorio_por_area(
     session = SessionLocal()
 
     try:
-        consulta = (
-            session.query(
-                Area.id.label("area_id"),
-                Area.nome.label("area"),
-                func.count(func.distinct(Indicacao.processo)).label("total_processos"),
-                func.count(Indicacao.id).label("total_indicacoes"),
-            )
-            .join(
-                Indicacao,
-                Indicacao.area_id == Area.id,
-            )
-            .filter(Indicacao.processo.isnot(None))
+        consulta = session.query(
+            Area.id.label("area_id"),
+            Area.nome.label("area"),
+            func.count(func.distinct(Indicacao.processo)).label("total_processos"),
+            func.count(Indicacao.id).label("total_indicacoes"),
+        ).join(
+            Indicacao,
+            Indicacao.area_id == Area.id,
         )
 
         consulta = aplicar_filtro_tipo(
@@ -487,9 +487,9 @@ def contar_areas_com_resultados(
     session = SessionLocal()
 
     try:
+        # Conta áreas com indicações, não apenas com processos.
         consulta = session.query(func.count(func.distinct(Indicacao.area_id))).filter(
-            Indicacao.processo.isnot(None),
-            Indicacao.area_id.isnot(None),
+            Indicacao.area_id.isnot(None)
         )
 
         consulta = aplicar_filtro_tipo(

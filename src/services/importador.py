@@ -5,7 +5,9 @@ import unicodedata
 import pandas as pd
 from sqlalchemy import func
 from sqlalchemy.dialects.postgresql import insert as pg_insert
+from src.logger import configurar_logger
 
+logger = configurar_logger()
 from src.database.connection import SessionLocal
 from src.database.models import Area, Pessoa, Indicacao, Processo
 
@@ -256,6 +258,7 @@ def obter_numero_rpv(dados):
 
 
 def obter_data(dados):
+    """Retorna a data da planilha ou None; nunca infere data pelo nome do arquivo."""
     valor = obter_campo(
         dados,
         [
@@ -265,22 +268,41 @@ def obter_data(dados):
         ],
     )
 
-    if not valor:
+    if valor is None:
         return None
 
+    # Valores já lidos como datetime/date não precisam de inferência textual.
     try:
-        data_convertida = pd.to_datetime(
-            valor,
-            dayfirst=True,
-            errors="coerce",
-        )
+        if isinstance(valor, (pd.Timestamp,)):
+            return None if pd.isna(valor) else valor.date()
+    except (TypeError, ValueError, OverflowError):
+        pass
 
-        if pd.isna(data_convertida):
+    texto = str(valor).strip()
+    if not texto or texto.lower() in {"nan", "none", "null", "nat"}:
+        return None
+
+    # Prioriza formatos ISO, comuns em valores como 2026-08-14 00:00:00.
+    formatos = (
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%d %H:%M:%S.%f",
+        "%Y-%m-%d",
+        "%Y-%m-%dT%H:%M:%S",
+        "%Y-%m-%dT%H:%M:%S.%f",
+    )
+    for formato in formatos:
+        try:
+            return pd.to_datetime(texto, format=formato, errors="raise").date()
+        except (TypeError, ValueError, OverflowError):
+            continue
+
+    # Para datas em formatos brasileiros, tenta dia/mês/ano.
+    try:
+        convertido = pd.to_datetime(texto, dayfirst=True, errors="coerce")
+        if pd.isna(convertido):
             return None
-
-        return data_convertida.date()
-
-    except (TypeError, ValueError):
+        return convertido.date()
+    except (TypeError, ValueError, OverflowError):
         return None
 
 
@@ -348,9 +370,45 @@ def buscar_ou_criar_processo(
     )
 
     if processo_existente:
-        processo_existente.quantidade = quantidade
-        processo_existente.data_processo = data_processo
-        processo_existente.arquivo_origem = nome_arquivo
+        data_banco = processo_existente.data_processo
+
+        if data_processo is None and data_banco is not None:
+            logger.warning(
+                "DATA AUSENTE NA PLANILHA | "
+                "area=%s | processo=%s | data_banco=%s | arquivo=%s",
+                area.nome,
+                numero,
+                data_banco,
+                nome_arquivo,
+            )
+
+        elif data_processo is not None and data_banco is None:
+            logger.warning(
+                "DATA AUSENTE NO BANCO | "
+                "area=%s | processo=%s | data_planilha=%s | arquivo=%s",
+                area.nome,
+                numero,
+                data_processo,
+                nome_arquivo,
+            )
+
+        elif (
+            data_processo is not None
+            and data_banco is not None
+            and data_banco != data_processo
+        ):
+            logger.warning(
+                "DIVERGENCIA DE DATA | "
+                "area=%s | processo=%s | data_banco=%s | "
+                "data_planilha=%s | arquivo=%s",
+                area.nome,
+                numero,
+                data_banco,
+                data_processo,
+                nome_arquivo,
+            )
+
+        # Não atualiza o registro existente.
         chaves_processos_pendentes.add(chave)
         return False
 
@@ -433,7 +491,6 @@ def importar_planilha(
     maior_quantidade = 0
 
     eh_projeto = "PROJ" in nome_arquivo.upper()
-    eh_trabalhista = "TRAB" in nome_arquivo.upper()
 
     for _, linha in df.iterrows():
         dados = preparar_linha(linha)
@@ -468,13 +525,9 @@ def importar_planilha(
 
         total_linhas_com_indicacao += 1
 
-        if eh_trabalhista:
-            processo_indicacao = numero_processo
-        else:
-            processo_indicacao = numero_processo
-
-            if not processo_indicacao:
-                continue
+        # Indicações podem existir sem número de processo em qualquer área.
+        # A data continua None quando não está preenchida na planilha.
+        processo_indicacao = numero_processo
 
         for item in indicacoes:
             pessoa = buscar_ou_criar_pessoa(
@@ -510,7 +563,7 @@ def importar_planilha(
             )
 
             if indicacao_existente:
-                indicacao_existente.quantidade = quantidade
+                # Não altera uma indicação já cadastrada; evita sobrescrita silenciosa.
                 chaves_indicacoes_pendentes.add(chave)
                 continue
 
@@ -538,9 +591,11 @@ def importar_planilha(
 
 def importar_todas(pasta_origem=None):
     """
-    Importa todas as planilhas compatíveis de uma pasta para o PostgreSQL.
+    Importa planilhas para o PostgreSQL sem apagar nem sobrescrever registros existentes.
 
-    Se nenhuma pasta for informada, mantém a pasta padrão antiga.
+    Indicações sem número de processo são permitidas. Datas ausentes permanecem None;
+    o mês não é inferido a partir do nome do arquivo.
+    Se nenhuma pasta for informada, usa a pasta padrão antiga.
     """
     from pathlib import Path
 
